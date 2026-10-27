@@ -1,6 +1,7 @@
 # oficina-billing-service
 
 Microsserviço de **Orçamento e Pagamento** do Tech Challenge SOAT Fase 4 — Grupo 77.
+Laravel 12, Postgres próprio, sem acessar o banco de outro serviço.
 
 ## Responsabilidades
 
@@ -12,6 +13,18 @@ Microsserviço de **Orçamento e Pagamento** do Tech Challenge SOAT Fase 4 — G
 | Criar cobrança e verificar pagamento | Integração com o **Mercado Pago** |
 | Anular orçamento | Compensação |
 | Estornar pagamento | Compensação |
+
+## O que esta versão faz
+
+- `POST /api/orcamentos` grava o orçamento e devolve o corpo do evento `orcamento.gerado`.
+- `GET /api/orcamentos/{id}` consulta o que foi gravado.
+- Swagger em `/api/documentation`.
+- **O preço não vem no comando.** O billing consulta o catálogo local `catalogo_precos`,
+  com os nomes e valores que a API da Fase 3 já usa (peça, insumo e serviço). Insumo entra
+  como `peca`, porque o contrato só tem `peca` e `servico`. Item desconhecido responde 422.
+
+Mercado Pago (preferência e consulta) e o consumidor da fila `billing.gerar-orcamento`
+entram no passo seguinte. O Access Token fica em `MP_ACCESS_TOKEN` e não vai para o Git.
 
 ## Banco
 
@@ -38,14 +51,34 @@ compensa: anula o orçamento e leva a OS para `CANCELADA`.
 O pagamento é cobrado **antes** da execução. É a *Pessimistic View* do ADR-0011 — não se
 presta serviço contra um estado que ainda pode mudar. Não inverta sem revisar o ADR.
 
-## Como rodar o ambiente
+## Como rodar
+
+O Postgres vem da infra compartilhada:
 
 ```bash
-git clone https://github.com/Ralima0711/oficina-infra-fase4.git
-cd oficina-infra-fase4 && docker compose up -d
+# no repo oficina-infra-fase4
+docker compose up -d billing-postgres
 ```
 
-O Postgres do Billing sobe na porta **5433**.
+Aqui:
+
+```bash
+cp .env.example .env
+php artisan key:generate
+php artisan migrate
+php artisan serve
+```
+
+O `.env.example` aponta para `127.0.0.1:5433`, banco `billing_service`.
+
+Os testes usam SQLite em memória e não precisam do Docker:
+
+```bash
+composer install
+cp .env.example .env
+php artisan key:generate
+php artisan test
+```
 
 ## Documentação
 
@@ -55,6 +88,7 @@ O Postgres do Billing sobe na porta **5433**.
 | `docs/adrs-fase4.md` | ADR-0007 a ADR-0012 |
 | `docs/asyncapi.yaml` | Contrato AsyncAPI dos eventos |
 | `docs/guia-testes-cobertura.md` | Pirâmide de testes e meta de 80% |
+| `docs/arquitetura-fase4.png` | Diagrama da arquitetura final |
 
 ## Regras do repositório
 
