@@ -16,7 +16,7 @@ class GerarOrcamento
             $total = 0.0;
 
             foreach ($comando['itensDiagnosticados'] as $item) {
-                $unitario = (float) $this->precos->valorUnitario($item['tipo']);
+                $unitario = (float) $this->precos->valorUnitario($item['tipo'], $item['descricao']);
                 $quantidade = (int) $item['quantidade'];
                 $total += $unitario * $quantidade;
                 $itens[] = [

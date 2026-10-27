@@ -2,18 +2,28 @@
 
 namespace App\Services;
 
+use App\Exceptions\ItemSemPreco;
+use App\Models\CatalogoPreco;
+
 class TabelaPrecos
 {
     /**
-     * Preço unitário inicial, até existir catálogo de peças e serviços.
-     * O comando GerarOrcamento não traz valor — o billing calcula.
+     * O comando GerarOrcamento não traz valor. O preço sai do catálogo local,
+     * com os mesmos nomes e valores usados na API da Fase 3.
      */
-    public function valorUnitario(string $tipo): string
+    public function valorUnitario(string $tipo, string $descricao): string
     {
-        return match ($tipo) {
-            'peca' => '95.00',
-            'servico' => '180.00',
-            default => throw new \InvalidArgumentException('Tipo de item desconhecido: '.$tipo),
-        };
+        $alvo = mb_strtolower(trim($descricao));
+
+        $item = CatalogoPreco::query()
+            ->where('tipo', $tipo)
+            ->get()
+            ->first(fn (CatalogoPreco $row) => mb_strtolower($row->descricao) === $alvo);
+
+        if ($item === null) {
+            throw ItemSemPreco::para($descricao, $tipo);
+        }
+
+        return $item->preco_unitario;
     }
 }

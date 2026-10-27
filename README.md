@@ -9,7 +9,7 @@ O payload segue o contrato em `oficina-infra-fase4` (`GerarOrcamento` / `orcamen
 - `POST /api/orcamentos` grava o orçamento e devolve o corpo do evento `orcamento.gerado`.
 - `GET /api/orcamentos/{id}` consulta o que foi gravado.
 - Swagger em `/api/documentation`.
-- Preço unitário inicial: peça `95.00`, serviço `180.00`. O comando não traz valor; o billing calcula. Validade: 7 dias.
+- O preço não vem no comando. O billing consulta o catálogo local `catalogo_precos`, com os nomes e valores que a API da Fase 3 já usa (peça, insumo e serviço). Insumo entra como `peca`, porque o contrato só tem `peca` e `servico`. Validade: 7 dias. Item desconhecido responde 422.
 
 Mercado Pago (preferência e consulta) e o consumidor da fila `billing.gerar-orcamento` entram no passo seguinte. O Access Token fica em `MP_ACCESS_TOKEN` e não vai para o Git.
 
