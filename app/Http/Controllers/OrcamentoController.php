@@ -25,12 +25,13 @@ class OrcamentoController extends Controller
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\JsonContent(
-                required: ['osId', 'clienteId', 'veiculo', 'descricaoProblema', 'itensDiagnosticados'],
+                required: ['osId', 'clienteId', 'veiculo', 'descricaoProblema'],
                 properties: [
                     new OA\Property(property: 'osId', type: 'string', format: 'uuid'),
                     new OA\Property(property: 'clienteId', type: 'string', format: 'uuid'),
                     new OA\Property(
                         property: 'veiculo',
+                        required: ['placa'],
                         type: 'object',
                         properties: [
                             new OA\Property(property: 'placa', type: 'string', example: 'DEM1A23'),
