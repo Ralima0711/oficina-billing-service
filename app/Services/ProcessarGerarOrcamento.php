@@ -4,9 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\ItemSemPreco;
 use App\Exceptions\MensagemIlegivel;
-use App\Mensageria\PublicadorEventos;
-use App\Models\MensagemProcessada;
-use App\Models\MensagemSaida;
+use App\Mensageria\CaixaDeSaida;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -16,7 +14,7 @@ class ProcessarGerarOrcamento
 {
     public function __construct(
         private readonly GerarOrcamento $gerar,
-        private readonly PublicadorEventos $publicador,
+        private readonly CaixaDeSaida $caixa,
     ) {}
 
     /**
@@ -31,8 +29,8 @@ class ProcessarGerarOrcamento
             throw new MensagemIlegivel('header.messageId ausente ou inválido.');
         }
 
-        if (MensagemProcessada::query()->where('message_id', $messageId)->exists()) {
-            $this->publicarPendentes($messageId);
+        if ($this->caixa->jaProcessada($messageId)) {
+            $this->caixa->publicarPendentes($messageId);
 
             return;
         }
@@ -49,14 +47,14 @@ class ProcessarGerarOrcamento
 
         try {
             DB::transaction(function () use ($mensagem, $messageId, $body, $osId) {
-                MensagemProcessada::query()->create([
-                    'message_id' => $messageId,
-                    'tipo' => is_string($mensagem['header']['type'] ?? null) ? $mensagem['header']['type'] : 'GerarOrcamento',
-                ]);
+                $this->caixa->registrar(
+                    $messageId,
+                    is_string($mensagem['header']['type'] ?? null) ? $mensagem['header']['type'] : 'GerarOrcamento',
+                );
 
                 $falha = $this->motivoDeFalha($body);
                 if ($falha !== null) {
-                    $this->gravarSaida($mensagem, 'orcamento.falhou', $this->corpoFalha($osId, $falha[0], $falha[1]));
+                    $this->caixa->gravar($mensagem, 'orcamento.falhou', $this->corpoFalha($osId, $falha[0], $falha[1]));
 
                     return;
                 }
@@ -64,20 +62,20 @@ class ProcessarGerarOrcamento
                 try {
                     $orcamento = $this->gerar->executar($this->ajustarAcessorios($body));
                 } catch (ItemSemPreco $e) {
-                    $this->gravarSaida($mensagem, 'orcamento.falhou', $this->corpoFalha($osId, 'item_fora_do_catalogo', $e->getMessage()));
+                    $this->caixa->gravar($mensagem, 'orcamento.falhou', $this->corpoFalha($osId, 'item_fora_do_catalogo', $e->getMessage()));
 
                     return;
                 }
 
-                $this->gravarSaida($mensagem, 'orcamento.gerado', $orcamento->paraEvento());
+                $this->caixa->gravar($mensagem, 'orcamento.gerado', $orcamento->paraEvento());
             });
         } catch (UniqueConstraintViolationException) {
-            $this->publicarPendentes($messageId);
+            $this->caixa->publicarPendentes($messageId);
 
             return;
         }
 
-        $this->publicarPendentes($messageId);
+        $this->caixa->publicarPendentes($messageId);
     }
 
     /**
@@ -183,59 +181,5 @@ class ProcessarGerarOrcamento
             'detalhe' => $detalhe,
             'ocorridoEm' => now()->utc()->format('Y-m-d\TH:i:s\Z'),
         ];
-    }
-
-    /**
-     * @param  array<string, mixed>  $mensagem
-     * @param  array<string, mixed>  $body
-     */
-    private function gravarSaida(array $mensagem, string $routingKey, array $body): void
-    {
-        $headerEntrada = $mensagem['header'];
-        $traceparent = $headerEntrada['traceparent'] ?? null;
-
-        $header = [
-            'messageId' => (string) Str::uuid(),
-            'sagaId' => is_string($headerEntrada['sagaId'] ?? null) ? $headerEntrada['sagaId'] : null,
-            'causationId' => $headerEntrada['messageId'],
-            'type' => $routingKey,
-            'occurredAt' => now()->utc()->format('Y-m-d\TH:i:s\Z'),
-            'version' => 1,
-        ];
-
-        if (is_string($traceparent) && $traceparent !== '') {
-            $header['traceparent'] = $traceparent;
-        }
-
-        MensagemSaida::query()->create([
-            'mensagem_entrada_id' => $headerEntrada['messageId'],
-            'routing_key' => $routingKey,
-            'envelope' => [
-                'header' => $header,
-                'body' => $body,
-            ],
-        ]);
-    }
-
-    private function publicarPendentes(string $messageId): void
-    {
-        $pendentes = MensagemSaida::query()
-            ->where('mensagem_entrada_id', $messageId)
-            ->whereNull('publicado_em')
-            ->orderBy('created_at')
-            ->get();
-
-        foreach ($pendentes as $saida) {
-            $envelope = $saida->envelope;
-            $traceparent = $envelope['header']['traceparent'] ?? null;
-
-            $this->publicador->publicar(
-                $saida->routing_key,
-                $envelope,
-                is_string($traceparent) && $traceparent !== '' ? $traceparent : null,
-            );
-
-            $saida->forceFill(['publicado_em' => now()])->save();
-        }
     }
 }

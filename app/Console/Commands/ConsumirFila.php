@@ -2,11 +2,13 @@
 
 namespace App\Console\Commands;
 
+use App\Exceptions\CobrancaException;
 use App\Exceptions\MensagemIlegivel;
 use App\Mensageria\ConexaoRabbit;
 use App\Mensageria\Envelope;
 use App\Mensageria\PublicadorEventos;
 use App\Mensageria\PublicadorRabbitMq;
+use App\Services\ProcessarCobrarPagamento;
 use App\Services\ProcessarGerarOrcamento;
 use Illuminate\Console\Command;
 use Illuminate\Database\QueryException;
@@ -22,11 +24,14 @@ class ConsumirFila extends Command
 {
     protected $signature = 'fila:consumir {--once : Consome uma mensagem e encerra}';
 
-    protected $description = 'Consome billing.gerar-orcamento e publica orcamento.gerado ou orcamento.falhou';
+    protected $description = 'Consome os comandos de billing e publica os eventos no exchange oficina.eventos';
 
     public function handle(): int
     {
-        $fila = (string) config('mensageria.filas.gerar_orcamento');
+        $filas = [
+            (string) config('mensageria.filas.gerar_orcamento') => ProcessarGerarOrcamento::class,
+            (string) config('mensageria.filas.cobrar_pagamento') => ProcessarCobrarPagamento::class,
+        ];
         $conexao = ConexaoRabbit::abrir();
         $canal = $conexao->channel();
         $encerrar = false;
@@ -36,41 +41,45 @@ class ConsumirFila extends Command
             (string) config('mensageria.exchange_eventos'),
         ));
 
-        try {
-            $canal->queue_declare($fila, true);
-        } catch (AMQPProtocolChannelException $e) {
-            $this->error("A fila {$fila} não existe neste broker. A topologia vem de rabbitmq/definitions.json no oficina-infra-fase4.");
-            $this->error($e->getMessage());
-            $conexao->close();
+        foreach (array_keys($filas) as $fila) {
+            try {
+                $canal->queue_declare($fila, true);
+            } catch (AMQPProtocolChannelException $e) {
+                $this->error("A fila {$fila} não existe neste broker. A topologia vem de rabbitmq/definitions.json no oficina-infra-fase4.");
+                $this->error($e->getMessage());
+                $conexao->close();
 
-            return self::FAILURE;
+                return self::FAILURE;
+            }
         }
 
         $this->escutarParada($canal, $encerrar);
         $canal->basic_qos(0, 1, false);
-
-        $processar = $this->laravel->make(ProcessarGerarOrcamento::class);
         $once = (bool) $this->option('once');
+        $processou = false;
 
-        $canal->basic_consume(
-            $fila,
-            '',
-            false,
-            false,
-            false,
-            false,
-            function (AMQPMessage $mensagem) use ($processar, $canal, $once) {
-                $this->tratar($mensagem, $processar, $canal);
-
-                if ($once) {
-                    $canal->basic_cancel($mensagem->getConsumerTag());
-                }
-            },
-        );
+        foreach ($filas as $fila => $processador) {
+            $processar = $this->laravel->make($processador);
+            $canal->basic_consume(
+                $fila,
+                '',
+                false,
+                false,
+                false,
+                false,
+                function (AMQPMessage $mensagem) use ($processar, $canal, $once, &$processou) {
+                    $this->tratar($mensagem, $processar, $canal);
+                    $processou = $once;
+                },
+            );
+        }
 
         try {
             while ($canal->is_consuming()) {
                 $canal->wait();
+                if ($processou) {
+                    break;
+                }
             }
         } catch (Throwable $e) {
             if (! $encerrar) {
@@ -87,7 +96,7 @@ class ConsumirFila extends Command
         return self::SUCCESS;
     }
 
-    private function tratar(AMQPMessage $mensagem, ProcessarGerarOrcamento $processar, AMQPChannel $canal): void
+    private function tratar(AMQPMessage $mensagem, ProcessarGerarOrcamento|ProcessarCobrarPagamento $processar, AMQPChannel $canal): void
     {
         try {
             $dados = json_decode($mensagem->getBody(), true, 512, JSON_THROW_ON_ERROR);
@@ -100,7 +109,7 @@ class ConsumirFila extends Command
         } catch (MensagemIlegivel $e) {
             $this->warn($e->getMessage());
             $canal->basic_nack($mensagem->getDeliveryTag(), false, false);
-        } catch (QueryException|AMQPRuntimeException $e) {
+        } catch (QueryException|AMQPRuntimeException|CobrancaException $e) {
             report($e);
             sleep(1);
             $canal->basic_nack($mensagem->getDeliveryTag(), false, true);
