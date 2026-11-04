@@ -94,7 +94,7 @@ class CobrarPagamento
 
     public function intervaloSegundos(): int
     {
-        return max(1, (int) config('services.mercadopago.poll_interval_seconds', 30));
+        return max(0, (int) config('services.mercadopago.poll_interval_seconds', 30));
     }
 
     private function pagamentoAtivo(Orcamento $orcamento): ?Pagamento

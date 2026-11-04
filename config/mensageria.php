@@ -11,6 +11,7 @@ return [
 
     'filas' => [
         'gerar_orcamento' => env('FILA_GERAR_ORCAMENTO', 'billing.gerar-orcamento'),
+        'cobrar_pagamento' => env('FILA_COBRAR_PAGAMENTO', 'billing.cobrar-pagamento'),
     ],
 
 ];
