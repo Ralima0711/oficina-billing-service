@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Models\Orcamento;
 use App\Models\Pagamento;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -123,17 +125,70 @@ class PagamentoTest extends TestCase
     {
         Http::fake();
 
-        $orcamento = $this->postJson('/api/orcamentos', [
-            'osId' => '11111111-1111-1111-1111-111111111111',
-            'clienteId' => '22222222-2222-2222-2222-222222222222',
+        $orcamento = Orcamento::query()->create([
+            'os_id' => '11111111-1111-1111-1111-111111111111',
+            'cliente_id' => '22222222-2222-2222-2222-222222222222',
+            'descricao_problema' => 'Sem itens',
             'veiculo' => ['placa' => 'DEM1A23'],
-            'descricaoProblema' => 'Sem itens',
-        ])->assertCreated();
+            'valor_total' => '0.00',
+            'moeda' => 'BRL',
+            'valido_ate' => now()->addDays(7),
+            'status' => 'gerado',
+        ]);
 
-        $this->postJson('/api/orcamentos/'.$orcamento->json('orcamentoId').'/pagamentos')
+        $this->postJson('/api/orcamentos/'.$orcamento->id.'/pagamentos')
             ->assertUnprocessable();
 
         Http::assertNothingSent();
+    }
+
+    public function test_impede_dois_pagamentos_ativos_no_mesmo_orcamento(): void
+    {
+        $pagamento = $this->pagamentoPendente();
+
+        $this->expectException(UniqueConstraintViolationException::class);
+
+        Pagamento::query()->create([
+            'orcamento_id' => $pagamento->orcamento_id,
+            'os_id' => $pagamento->os_id,
+            'preference_id' => 'pref-2',
+            'status' => 'pendente',
+            'valor' => '241.80',
+            'moeda' => 'BRL',
+        ]);
+    }
+
+    public function test_permite_nova_cobranca_depois_da_recusa(): void
+    {
+        $pagamento = $this->pagamentoPendente();
+        $pagamento->status = 'recusado';
+        $pagamento->motivo = 'timeout';
+        $pagamento->save();
+
+        Pagamento::query()->create([
+            'orcamento_id' => $pagamento->orcamento_id,
+            'os_id' => $pagamento->os_id,
+            'preference_id' => 'pref-2',
+            'status' => 'pendente',
+            'valor' => '241.80',
+            'moeda' => 'BRL',
+        ]);
+
+        $this->assertSame(2, Pagamento::query()->count());
+    }
+
+    public function test_esgota_o_polling_com_motivo_timeout(): void
+    {
+        config(['services.mercadopago.poll_max_attempts' => 1]);
+        Http::fake([
+            'https://api.mercadopago.com/v1/payments/search*' => Http::response(['results' => []]),
+        ]);
+
+        $pagamento = $this->pagamentoPendente();
+
+        $this->getJson('/api/pagamentos/'.$pagamento->id)
+            ->assertOk()
+            ->assertJsonPath('motivo', 'timeout');
     }
 
     public function test_recusa_cobranca_sem_token(): void

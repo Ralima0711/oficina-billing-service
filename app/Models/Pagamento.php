@@ -24,6 +24,7 @@ class Pagamento extends Model
         'motivo',
         'sandbox_init_point',
         'confirmado_em',
+        'tentativas',
     ];
 
     protected function casts(): array
@@ -31,6 +32,7 @@ class Pagamento extends Model
         return [
             'valor' => 'decimal:2',
             'confirmado_em' => 'datetime',
+            'tentativas' => 'integer',
         ];
     }
 

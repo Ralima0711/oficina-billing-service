@@ -26,8 +26,10 @@ Laravel 12, Postgres próprio, sem acessar o banco de outro serviço.
   como `peca`, porque o contrato só tem `peca` e `servico`. Item desconhecido responde 422.
   `itensDiagnosticados` é obrigatório, com pelo menos um item (contrato v1.1). Sem itens, a API responde 422. No veículo, só a placa é obrigatória.
 
-O Access Token de teste fica em `MP_ACCESS_TOKEN` e não vai para o Git. A fila
-`billing.cobrar-pagamento` e a publicação do evento entram no passo seguinte.
+O Access Token de teste fica em `MP_ACCESS_TOKEN` e não vai para o Git. A consulta
+ao Mercado Pago é por polling: a cada `MP_POLL_INTERVAL_SECONDS` (30) segundos, no
+máximo `MP_POLL_MAX_ATTEMPTS` (20) vezes. Esgotado o limite, o pagamento fica
+`recusado` com motivo `timeout`. A fila `billing.cobrar-pagamento` entra no passo seguinte.
 
 ## Banco
 

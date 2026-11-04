@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\CobrancaException;
 use App\Models\Orcamento;
 use App\Models\Pagamento;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 
 class CobrarPagamento
@@ -13,14 +14,10 @@ class CobrarPagamento
 
     public function iniciar(Orcamento $orcamento): Pagamento
     {
-        $existente = Pagamento::query()
-            ->where('orcamento_id', $orcamento->id)
-            ->whereIn('status', ['pendente', 'confirmado'])
-            ->latest('created_at')
-            ->first();
+        $existente = $this->pagamentoAtivo($orcamento);
 
         if ($existente !== null) {
-            return $existente;
+            return $this->garantirPreferencia($existente, $orcamento);
         }
 
         $valor = (float) $orcamento->valor_total;
@@ -29,51 +26,108 @@ class CobrarPagamento
             throw CobrancaException::semValor();
         }
 
-        $preferencia = $this->mercadoPago->criarPreferencia($orcamento->id, $valor, $orcamento->moeda);
+        try {
+            $pagamento = Pagamento::query()->create([
+                'orcamento_id' => $orcamento->id,
+                'os_id' => $orcamento->os_id,
+                'preference_id' => null,
+                'status' => 'pendente',
+                'valor' => number_format($valor, 2, '.', ''),
+                'moeda' => $orcamento->moeda,
+            ]);
+        } catch (UniqueConstraintViolationException $e) {
+            $pagamento = $this->pagamentoAtivo($orcamento);
 
-        return Pagamento::query()->create([
-            'orcamento_id' => $orcamento->id,
-            'os_id' => $orcamento->os_id,
-            'preference_id' => $preferencia['id'],
-            'status' => 'pendente',
-            'valor' => number_format($valor, 2, '.', ''),
-            'moeda' => $orcamento->moeda,
-            'sandbox_init_point' => $preferencia['sandbox_init_point'],
-        ]);
+            if ($pagamento === null) {
+                throw $e;
+            }
+        }
+
+        return $this->garantirPreferencia($pagamento, $orcamento);
     }
 
     public function consultar(Pagamento $pagamento): Pagamento
     {
-        if ($pagamento->status === 'confirmado') {
+        if (in_array($pagamento->status, ['confirmado', 'recusado'], true)) {
             return $pagamento;
         }
 
+        $pagamento->tentativas = (int) $pagamento->tentativas + 1;
         $remoto = $this->mercadoPago->buscarPorReferencia($pagamento->orcamento_id);
+        $status = $remoto === null ? 'pendente' : $this->statusLocal((string) ($remoto['status'] ?? ''));
 
-        if ($remoto === null) {
-            return $pagamento;
+        if (is_array($remoto) && isset($remoto['id'])) {
+            $pagamento->payment_id = (string) $remoto['id'];
         }
 
-        $status = $this->statusLocal((string) ($remoto['status'] ?? ''));
-        $pagamento->payment_id = isset($remoto['id']) ? (string) $remoto['id'] : $pagamento->payment_id;
-        $pagamento->status = $status;
-
-        if ($status === 'confirmado') {
+        if ($status === 'confirmado' && is_array($remoto)) {
+            $pagamento->status = 'confirmado';
             $pagamento->valor = number_format((float) ($remoto['transaction_amount'] ?? $pagamento->valor), 2, '.', '');
             $pagamento->metodo = $this->metodo($remoto['payment_type_id'] ?? null, $remoto['payment_method_id'] ?? null);
             $pagamento->motivo = null;
             $pagamento->confirmado_em = $this->confirmadoEm($remoto['date_approved'] ?? null);
+            $pagamento->save();
+
+            return $pagamento;
         }
 
-        if ($status === 'recusado') {
+        if ($status === 'recusado' && is_array($remoto)) {
+            $pagamento->status = 'recusado';
             $pagamento->metodo = $this->metodo($remoto['payment_type_id'] ?? null, $remoto['payment_method_id'] ?? null);
             $pagamento->motivo = (string) ($remoto['status_detail'] ?? 'recusado');
             $pagamento->confirmado_em = $this->confirmadoEm($remoto['date_created'] ?? null);
+            $pagamento->save();
+
+            return $pagamento;
+        }
+
+        if ($pagamento->tentativas >= $this->maxTentativas()) {
+            $pagamento->status = 'recusado';
+            $pagamento->motivo = 'timeout';
+            $pagamento->confirmado_em = now()->utc();
         }
 
         $pagamento->save();
 
         return $pagamento;
+    }
+
+    public function intervaloSegundos(): int
+    {
+        return max(1, (int) config('services.mercadopago.poll_interval_seconds', 30));
+    }
+
+    private function pagamentoAtivo(Orcamento $orcamento): ?Pagamento
+    {
+        return Pagamento::query()
+            ->where('orcamento_id', $orcamento->id)
+            ->whereIn('status', ['pendente', 'confirmado'])
+            ->latest('created_at')
+            ->first();
+    }
+
+    private function garantirPreferencia(Pagamento $pagamento, Orcamento $orcamento): Pagamento
+    {
+        if ($pagamento->preference_id !== null) {
+            return $pagamento;
+        }
+
+        $preferencia = $this->mercadoPago->criarPreferencia(
+            $orcamento->id,
+            (float) $pagamento->valor,
+            $pagamento->moeda,
+        );
+
+        $pagamento->preference_id = $preferencia['id'];
+        $pagamento->sandbox_init_point = $preferencia['sandbox_init_point'];
+        $pagamento->save();
+
+        return $pagamento;
+    }
+
+    private function maxTentativas(): int
+    {
+        return max(1, (int) config('services.mercadopago.poll_max_attempts', 20));
     }
 
     private function statusLocal(string $status): string
