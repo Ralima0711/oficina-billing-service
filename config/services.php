@@ -28,6 +28,13 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'mercadopago' => [
+        'access_token' => env('MP_ACCESS_TOKEN'),
+        'base_url' => env('MP_BASE_URL', 'https://api.mercadopago.com'),
+        'poll_interval_seconds' => (int) env('MP_POLL_INTERVAL_SECONDS', 30),
+        'poll_max_attempts' => (int) env('MP_POLL_MAX_ATTEMPTS', 20),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

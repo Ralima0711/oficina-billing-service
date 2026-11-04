@@ -18,14 +18,18 @@ Laravel 12, Postgres próprio, sem acessar o banco de outro serviço.
 
 - `POST /api/orcamentos` grava o orçamento e devolve o corpo do evento `orcamento.gerado`.
 - `GET /api/orcamentos/{id}` consulta o que foi gravado.
+- `POST /api/orcamentos/{id}/pagamentos` cria a preferência no sandbox do Mercado Pago e devolve o `sandboxInitPoint`.
+- `GET /api/pagamentos/{id}` consulta o pagamento e devolve `pagamento.confirmado`, `pagamento.recusado` ou `pendente`.
 - Swagger em `/api/documentation`.
 - **O preço não vem no comando.** O billing consulta o catálogo local `catalogo_precos`,
   com os nomes e valores que a API da Fase 3 já usa (peça, insumo e serviço). Insumo entra
   como `peca`, porque o contrato só tem `peca` e `servico`. Item desconhecido responde 422.
   `itensDiagnosticados` é obrigatório, com pelo menos um item (contrato v1.1). Sem itens, a API responde 422. No veículo, só a placa é obrigatória.
 
-Mercado Pago (preferência e consulta) e o consumidor da fila `billing.gerar-orcamento`
-entram no passo seguinte. O Access Token fica em `MP_ACCESS_TOKEN` e não vai para o Git.
+O Access Token de teste fica em `MP_ACCESS_TOKEN` e não vai para o Git. A consulta
+ao Mercado Pago é por polling: a cada `MP_POLL_INTERVAL_SECONDS` (30) segundos, no
+máximo `MP_POLL_MAX_ATTEMPTS` (20) vezes. Esgotado o limite, o pagamento fica
+`recusado` com motivo `timeout`. A fila `billing.cobrar-pagamento` entra no passo seguinte.
 
 ## Banco
 

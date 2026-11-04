@@ -1,5 +1,6 @@
 <?php
 
+use App\Exceptions\CobrancaException;
 use App\Exceptions\ItemSemPreco;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -20,6 +21,12 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (ItemSemPreco $e, Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return response()->json(['message' => $e->getMessage()], 422);
+            }
+        });
+
+        $exceptions->render(function (CobrancaException $e, Request $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json(['message' => $e->getMessage()], $e->httpStatus);
             }
         });
     })->create();
