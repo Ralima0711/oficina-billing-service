@@ -65,7 +65,7 @@ class OrcamentoController extends Controller
     {
         $orcamento = $this->gerar->executar($request->validated());
 
-        return response()->json($this->evento($orcamento), 201);
+        return response()->json($orcamento->paraEvento(), 201);
     }
 
     #[OA\Get(
@@ -85,23 +85,6 @@ class OrcamentoController extends Controller
     {
         $orcamento = Orcamento::query()->with('itens')->findOrFail($id);
 
-        return response()->json($this->evento($orcamento));
-    }
-
-    private function evento(Orcamento $orcamento): array
-    {
-        return [
-            'osId' => $orcamento->os_id,
-            'orcamentoId' => $orcamento->id,
-            'valorTotal' => (float) $orcamento->valor_total,
-            'moeda' => $orcamento->moeda,
-            'validoAte' => $orcamento->valido_ate->utc()->format('Y-m-d\TH:i:s\Z'),
-            'itens' => $orcamento->itens->map(fn ($item) => [
-                'descricao' => $item->descricao,
-                'tipo' => $item->tipo,
-                'quantidade' => $item->quantidade,
-                'valorUnitario' => (float) $item->valor_unitario,
-            ])->all(),
-        ];
+        return response()->json($orcamento->paraEvento());
     }
 }

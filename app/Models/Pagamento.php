@@ -40,4 +40,27 @@ class Pagamento extends Model
     {
         return $this->belongsTo(Orcamento::class);
     }
+
+    /**
+     * Corpo de pagamento.confirmado ou pagamento.recusado.
+     *
+     * @return array<string, mixed>
+     */
+    public function paraEvento(): array
+    {
+        $corpo = [
+            'osId' => $this->os_id,
+            'pagamentoId' => $this->id,
+            'orcamentoId' => $this->orcamento_id,
+            'valorPago' => (float) $this->valor,
+            'metodo' => $this->metodo,
+            'confirmadoEm' => $this->confirmado_em?->utc()->format('Y-m-d\TH:i:s\Z'),
+        ];
+
+        if ($this->status === 'recusado') {
+            $corpo['motivo'] = $this->motivo;
+        }
+
+        return $corpo;
+    }
 }
