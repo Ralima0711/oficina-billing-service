@@ -11,7 +11,7 @@ use OpenApi\Attributes as OA;
 #[OA\Info(
     version: '0.1.0',
     title: 'Oficina Billing Service',
-    description: 'Orçamento e pagamento da Fase 4. Payload alinhado ao contrato de eventos v1.0.'
+    description: 'Orçamento e pagamento da Fase 4. Payload alinhado ao contrato de eventos v1.1.'
 )]
 #[OA\Server(url: '/', description: 'Esta aplicação')]
 class OrcamentoController extends Controller
@@ -25,7 +25,7 @@ class OrcamentoController extends Controller
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\JsonContent(
-                required: ['osId', 'clienteId', 'veiculo', 'descricaoProblema'],
+                required: ['osId', 'clienteId', 'veiculo', 'descricaoProblema', 'itensDiagnosticados'],
                 properties: [
                     new OA\Property(property: 'osId', type: 'string', format: 'uuid'),
                     new OA\Property(property: 'clienteId', type: 'string', format: 'uuid'),
@@ -43,6 +43,7 @@ class OrcamentoController extends Controller
                     new OA\Property(
                         property: 'itensDiagnosticados',
                         type: 'array',
+                        minItems: 1,
                         items: new OA\Items(
                             properties: [
                                 new OA\Property(property: 'descricao', type: 'string'),

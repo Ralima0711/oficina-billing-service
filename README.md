@@ -22,7 +22,7 @@ Laravel 12, Postgres próprio, sem acessar o banco de outro serviço.
 - **O preço não vem no comando.** O billing consulta o catálogo local `catalogo_precos`,
   com os nomes e valores que a API da Fase 3 já usa (peça, insumo e serviço). Insumo entra
   como `peca`, porque o contrato só tem `peca` e `servico`. Item desconhecido responde 422.
-  `itensDiagnosticados` é opcional: sem itens, o total é 0. No veículo, só a placa é obrigatória.
+  `itensDiagnosticados` é obrigatório, com pelo menos um item (contrato v1.1). Sem itens, a API responde 422. No veículo, só a placa é obrigatória.
 
 Mercado Pago (preferência e consulta) e o consumidor da fila `billing.gerar-orcamento`
 entram no passo seguinte. O Access Token fica em `MP_ACCESS_TOKEN` e não vai para o Git.

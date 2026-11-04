@@ -34,19 +34,29 @@ class OrcamentoTest extends TestCase
         $this->getJson('/api/orcamentos/'.$id)->assertOk()->assertJsonPath('valorTotal', 241.8);
     }
 
-    public function test_gera_orcamento_sem_itens_e_so_com_a_placa(): void
+    public function test_rejeita_orcamento_sem_itens(): void
     {
-        $resposta = $this->postJson('/api/orcamentos', [
+        $this->postJson('/api/orcamentos', [
             'osId' => '11111111-1111-1111-1111-111111111111',
             'clienteId' => '22222222-2222-2222-2222-222222222222',
             'veiculo' => ['placa' => 'DEM1A23'],
             'descricaoProblema' => 'Barulho no freio',
-        ]);
+        ])->assertUnprocessable();
+    }
 
-        $resposta->assertCreated()
-            ->assertJsonPath('valorTotal', 0)
-            ->assertJsonPath('itens', [])
-            ->assertJsonPath('moeda', 'BRL');
+    public function test_gera_orcamento_so_com_a_placa(): void
+    {
+        $this->postJson('/api/orcamentos', [
+            'osId' => '11111111-1111-1111-1111-111111111111',
+            'clienteId' => '22222222-2222-2222-2222-222222222222',
+            'veiculo' => ['placa' => 'DEM1A23'],
+            'descricaoProblema' => 'Barulho no freio',
+            'itensDiagnosticados' => [
+                ['descricao' => 'Filtro de Óleo', 'tipo' => 'peca', 'quantidade' => 1],
+            ],
+        ])->assertCreated()
+            ->assertJsonPath('valorTotal', 45.9)
+            ->assertJsonCount(1, 'itens');
     }
 
     public function test_rejeita_item_que_nao_esta_no_catalogo(): void

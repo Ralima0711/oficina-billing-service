@@ -21,7 +21,7 @@ class StoreOrcamentoRequest extends FormRequest
             'veiculo.modelo' => ['sometimes', 'nullable', 'string', 'max:120'],
             'veiculo.ano' => ['sometimes', 'nullable', 'integer', 'min:1900', 'max:2100'],
             'descricaoProblema' => ['required', 'string'],
-            'itensDiagnosticados' => ['sometimes', 'nullable', 'array'],
+            'itensDiagnosticados' => ['required', 'array', 'min:1'],
             'itensDiagnosticados.*.descricao' => ['required', 'string'],
             'itensDiagnosticados.*.tipo' => ['required', 'in:peca,servico'],
             'itensDiagnosticados.*.quantidade' => ['required', 'integer', 'min:1'],
