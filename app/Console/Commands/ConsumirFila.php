@@ -5,10 +5,13 @@ namespace App\Console\Commands;
 use App\Exceptions\CobrancaException;
 use App\Exceptions\MensagemIlegivel;
 use App\Mensageria\ConexaoRabbit;
+use App\Mensageria\ConsumidorDeComando;
 use App\Mensageria\Envelope;
 use App\Mensageria\PublicadorEventos;
 use App\Mensageria\PublicadorRabbitMq;
+use App\Services\ProcessarAnularOrcamento;
 use App\Services\ProcessarCobrarPagamento;
+use App\Services\ProcessarEstornarPagamento;
 use App\Services\ProcessarGerarOrcamento;
 use Illuminate\Console\Command;
 use Illuminate\Database\QueryException;
@@ -33,6 +36,8 @@ class ConsumirFila extends Command
         $filas = $this->filasEscolhidas([
             (string) config('mensageria.filas.gerar_orcamento') => ProcessarGerarOrcamento::class,
             (string) config('mensageria.filas.cobrar_pagamento') => ProcessarCobrarPagamento::class,
+            (string) config('mensageria.filas.anular_orcamento') => ProcessarAnularOrcamento::class,
+            (string) config('mensageria.filas.estornar_pagamento') => ProcessarEstornarPagamento::class,
         ]);
 
         if ($filas === []) {
@@ -113,9 +118,9 @@ class ConsumirFila extends Command
      * consultar() desiste e publica pagamento.recusado com motivo timeout — mas é
      * head-of-line blocking, e na demo parece travamento.
      *
-     * Sem --fila o comportamento é o de antes: um processo para as duas filas.
+     * Sem --fila o processo consome todas as filas de comando.
      *
-     * @param array<string, class-string> $filas
+     * @param  array<string, class-string>  $filas
      * @return array<string, class-string>
      */
     private function filasEscolhidas(array $filas): array
@@ -129,8 +134,8 @@ class ConsumirFila extends Command
         $desconhecidas = array_diff($escolhidas, array_keys($filas));
 
         if ($desconhecidas !== []) {
-            $this->error('Fila desconhecida: ' . implode(', ', $desconhecidas));
-            $this->line('Filas de comando: ' . implode(', ', array_keys($filas)));
+            $this->error('Fila desconhecida: '.implode(', ', $desconhecidas));
+            $this->line('Filas de comando: '.implode(', ', array_keys($filas)));
 
             return [];
         }
@@ -138,7 +143,7 @@ class ConsumirFila extends Command
         return array_intersect_key($filas, array_flip($escolhidas));
     }
 
-    private function tratar(AMQPMessage $mensagem, ProcessarGerarOrcamento|ProcessarCobrarPagamento $processar, AMQPChannel $canal): void
+    private function tratar(AMQPMessage $mensagem, ConsumidorDeComando $processar, AMQPChannel $canal): void
     {
         try {
             $dados = json_decode($mensagem->getBody(), true, 512, JSON_THROW_ON_ERROR);
