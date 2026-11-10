@@ -3,10 +3,12 @@
 namespace App\Mensageria;
 
 use App\Exceptions\MensagemIlegivel;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class ComandoRecebido
 {
+    /** Motivos que o contrato v1.1 define (MotivoCompensacao). Um valor fora daqui e logado, nao recusado. */
     private const MOTIVOS = [
         'orcamento_falhou',
         'orcamento_recusado',
@@ -50,8 +52,26 @@ class ComandoRecebido
         }
 
         $motivo = $body['motivo'] ?? null;
-        if (! is_string($motivo) || ! in_array($motivo, self::MOTIVOS, true)) {
+        if (! is_string($motivo) || trim($motivo) === '') {
             throw new MensagemIlegivel('body.motivo ausente ou inválido.');
+        }
+
+        // O motivo e campo ACESSORIO: ele so vai para log e para a coluna, e nao
+        // muda o que a compensacao faz. Pelo ADR-0014, campo acessorio fora do
+        // dominio se ajusta e se registra — nao derruba o comando.
+        //
+        // Recusar um motivo desconhecido mandaria a compensacao para a DLQ, e
+        // compensacao que nao acontece e dinheiro que nao volta. Bastaria o
+        // contrato ganhar um motivo novo para o billing parar de estornar em
+        // silencio enquanto a Execucao continuaria compensando — ela ja aceita
+        // qualquer motivo, pelo mesmo raciocinio.
+        if (! in_array($motivo, self::MOTIVOS, true)) {
+            Log::warning('motivo de compensacao fora do contrato', [
+                'motivo' => $motivo,
+                'osId' => $osId,
+                'messageId' => $messageId,
+                'conhecidos' => self::MOTIVOS,
+            ]);
         }
 
         return new self($messageId, $osId, $motivo, $mensagem, $body);
