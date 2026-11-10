@@ -20,7 +20,7 @@ Laravel 12, Postgres próprio, sem acessar o banco de outro serviço.
 - `GET /api/orcamentos/{id}` consulta o que foi gravado.
 - `POST /api/orcamentos/{id}/pagamentos` cria a preferência no sandbox do Mercado Pago e devolve o `sandboxInitPoint`.
 - `GET /api/pagamentos/{id}` consulta o pagamento e devolve `pagamento.confirmado`, `pagamento.recusado` ou `pendente`.
-- `php artisan fila:consumir` consome `billing.gerar-orcamento` e `billing.cobrar-pagamento`. Publica `orcamento.gerado`, `orcamento.falhou`, `pagamento.confirmado` ou `pagamento.recusado` no exchange `oficina.eventos`.
+- `php artisan fila:consumir` consome `billing.gerar-orcamento`, `billing.cobrar-pagamento`, `billing.anular-orcamento` e `billing.estornar-pagamento`. Publica `orcamento.gerado`, `orcamento.falhou`, `pagamento.confirmado` ou `pagamento.recusado`. Anular e estornar só mudam o estado local: o contrato não define evento para a compensação.
 - Swagger em `/api/documentation`.
 - **O preço não vem no comando.** O billing consulta o catálogo local `catalogo_precos`,
   com os nomes e valores que a API da Fase 3 já usa (peça, insumo e serviço). Insumo entra
@@ -52,8 +52,7 @@ Nenhum outro serviço acessa este banco.
 `orcamento.falhou`, `orcamento.aprovado`, `orcamento.recusado`, `aprovacao.expirada`,
 `pagamento.confirmado` e `pagamento.recusado`.
 
-Nesta versão o worker consome `billing.gerar-orcamento` e `billing.cobrar-pagamento`.
-Anulação, estorno e expiração de aprovação ainda não têm consumidor.
+Nesta versão o worker consome geração, cobrança, anulação e estorno. A expiração de aprovação ainda não tem consumidor. Compensação que não encontra o recurso é pulada e a mensagem é confirmada.
 
 ### O timeout de aprovação não é job
 

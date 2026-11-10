@@ -4,13 +4,14 @@ namespace App\Services;
 
 use App\Exceptions\MensagemIlegivel;
 use App\Mensageria\CaixaDeSaida;
+use App\Mensageria\ConsumidorDeComando;
 use App\Models\Orcamento;
 use App\Models\Pagamento;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-class ProcessarCobrarPagamento
+class ProcessarCobrarPagamento implements ConsumidorDeComando
 {
     public function __construct(
         private readonly CobrarPagamento $cobrar,

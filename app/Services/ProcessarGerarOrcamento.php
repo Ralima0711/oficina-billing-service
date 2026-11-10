@@ -5,12 +5,13 @@ namespace App\Services;
 use App\Exceptions\ItemSemPreco;
 use App\Exceptions\MensagemIlegivel;
 use App\Mensageria\CaixaDeSaida;
+use App\Mensageria\ConsumidorDeComando;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
-class ProcessarGerarOrcamento
+class ProcessarGerarOrcamento implements ConsumidorDeComando
 {
     public function __construct(
         private readonly GerarOrcamento $gerar,

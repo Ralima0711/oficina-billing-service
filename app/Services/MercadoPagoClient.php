@@ -44,6 +44,24 @@ class MercadoPagoClient
         return is_array($resultado) ? $resultado : null;
     }
 
+    public function estornar(string $paymentId, string $idempotencyKey): void
+    {
+        $resposta = $this->http()
+            ->withHeaders(['X-Idempotency-Key' => $idempotencyKey])
+            ->post($this->url('/v1/payments/'.$paymentId.'/refunds'));
+
+        if ($resposta->successful()) {
+            return;
+        }
+
+        $consulta = $this->http()->get($this->url('/v1/payments/'.$paymentId));
+        if ($consulta->successful() && $consulta->json('status') === 'refunded') {
+            return;
+        }
+
+        throw CobrancaException::mercadoPago($resposta->status());
+    }
+
     private function http(): PendingRequest
     {
         $token = config('services.mercadopago.access_token');
