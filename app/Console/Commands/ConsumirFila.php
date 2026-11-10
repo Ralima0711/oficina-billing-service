@@ -22,16 +22,23 @@ use Throwable;
 
 class ConsumirFila extends Command
 {
-    protected $signature = 'fila:consumir {--once : Consome uma mensagem e encerra}';
+    protected $signature = 'fila:consumir
+                            {--fila=* : Consome só estas filas (padrão: todas as de comando)}
+                            {--once : Consome uma mensagem e encerra}';
 
     protected $description = 'Consome os comandos de billing e publica os eventos no exchange oficina.eventos';
 
     public function handle(): int
     {
-        $filas = [
+        $filas = $this->filasEscolhidas([
             (string) config('mensageria.filas.gerar_orcamento') => ProcessarGerarOrcamento::class,
             (string) config('mensageria.filas.cobrar_pagamento') => ProcessarCobrarPagamento::class,
-        ];
+        ]);
+
+        if ($filas === []) {
+            return self::FAILURE;
+        }
+
         $conexao = ConexaoRabbit::abrir();
         $canal = $conexao->channel();
         $encerrar = false;
@@ -94,6 +101,41 @@ class ConsumirFila extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Filtra as filas pelo --fila, para dar um processo a cada uma.
+     *
+     * O acompanhamento do pagamento faz polling dentro do callback: com os padrões
+     * (30s de intervalo, 20 tentativas) o pior caso são dez minutos. Como o prefetch
+     * é 1 e os dois basic_consume vivem no mesmo canal, um pagamento lento segura a
+     * fila de gerar-orcamento atrás dele por todo esse tempo. Não trava a saga — o
+     * consultar() desiste e publica pagamento.recusado com motivo timeout — mas é
+     * head-of-line blocking, e na demo parece travamento.
+     *
+     * Sem --fila o comportamento é o de antes: um processo para as duas filas.
+     *
+     * @param array<string, class-string> $filas
+     * @return array<string, class-string>
+     */
+    private function filasEscolhidas(array $filas): array
+    {
+        $escolhidas = array_filter(array_map('trim', (array) $this->option('fila')));
+
+        if ($escolhidas === []) {
+            return $filas;
+        }
+
+        $desconhecidas = array_diff($escolhidas, array_keys($filas));
+
+        if ($desconhecidas !== []) {
+            $this->error('Fila desconhecida: ' . implode(', ', $desconhecidas));
+            $this->line('Filas de comando: ' . implode(', ', array_keys($filas)));
+
+            return [];
+        }
+
+        return array_intersect_key($filas, array_flip($escolhidas));
     }
 
     private function tratar(AMQPMessage $mensagem, ProcessarGerarOrcamento|ProcessarCobrarPagamento $processar, AMQPChannel $canal): void
