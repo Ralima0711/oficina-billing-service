@@ -68,19 +68,6 @@ class PagamentoController extends Controller
             ];
         }
 
-        $corpo = [
-            'osId' => $pagamento->os_id,
-            'pagamentoId' => $pagamento->id,
-            'orcamentoId' => $pagamento->orcamento_id,
-            'valorPago' => (float) $pagamento->valor,
-            'metodo' => $pagamento->metodo,
-            'confirmadoEm' => $pagamento->confirmado_em?->utc()->format('Y-m-d\TH:i:s\Z'),
-        ];
-
-        if ($pagamento->status === 'recusado') {
-            $corpo['motivo'] = $pagamento->motivo;
-        }
-
-        return $corpo;
+        return $pagamento->paraEvento();
     }
 }
