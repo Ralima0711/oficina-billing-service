@@ -111,15 +111,33 @@ class ConsumirCompensacaoTest extends TestCase
         }
     }
 
-    public function test_motivo_invalido_nao_gera_efeito(): void
+    /**
+     * ADR-0014: o motivo e campo acessorio — so vai para log e para a coluna, e nao
+     * muda o que a compensacao faz. Recusar um valor desconhecido mandaria a
+     * compensacao para a DLQ, e compensacao que nao acontece e dinheiro que nao
+     * volta. A Execucao ja aceita qualquer motivo pelo mesmo raciocinio.
+     */
+    public function test_motivo_fora_do_contrato_nao_impede_a_compensacao(): void
     {
         $orcamento = $this->orcamento();
         $mensagem = $this->mensagem($orcamento['osId'], $orcamento['orcamentoId'], 'pagamento_recusado');
-        $mensagem['body']['motivo'] = 'cancelado_pelo_cliente';
+        $mensagem['body']['motivo'] = 'motivo_que_o_contrato_ainda_nao_tem';
+
+        $this->anular()->executar($mensagem);
+
+        $this->assertSame('anulado', Orcamento::query()->find($orcamento['orcamentoId'])->status);
+        $this->assertSame(1, MensagemProcessada::query()->count());
+    }
+
+    public function test_motivo_ausente_e_ilegivel(): void
+    {
+        $orcamento = $this->orcamento();
+        $mensagem = $this->mensagem($orcamento['osId'], $orcamento['orcamentoId'], 'pagamento_recusado');
+        unset($mensagem['body']['motivo']);
 
         try {
             $this->anular()->executar($mensagem);
-            $this->fail('o motivo deveria ser ilegível');
+            $this->fail('motivo ausente deveria ser ilegível');
         } catch (MensagemIlegivel) {
             $this->assertSame('gerado', Orcamento::query()->find($orcamento['orcamentoId'])->status);
             $this->assertSame(0, MensagemProcessada::query()->count());
