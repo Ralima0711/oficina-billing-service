@@ -14,6 +14,7 @@ use App\Services\ProcessarCobrarPagamento;
 use App\Services\ProcessarEstornarPagamento;
 use App\Services\ProcessarGerarOrcamento;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Database\QueryException;
 use JsonException;
 use PhpAmqpLib\Channel\AMQPChannel;
@@ -64,6 +65,15 @@ class ConsumirFila extends Command
                 return self::FAILURE;
             }
         }
+
+        // Linha de subida: sem ela nao da para saber, olhando o log do
+        // container, se o worker esta vivo nem em que filas ele esta. Era o
+        // caso ate 11/11 — o worker consumia e gerava orcamento com
+        // `docker compose logs` completamente vazio.
+        Log::info('Consumidor: iniciando', [
+            'filas' => array_keys($filas),
+            'exchange' => (string) config('mensageria.exchange_eventos'),
+        ]);
 
         $this->escutarParada($canal, $encerrar);
         $canal->basic_qos(0, 1, false);

@@ -1,31 +1,51 @@
-name: CI
+name: CI/CD
+
+# Ate 12/11 este arquivo era uma CI propria e minima: `coverage: none`, sem
+# quality gate, sem build de imagem e sem deploy. O pipeline reutilizavel
+# existia no oficina-infra-fase4 e nao era chamado por ninguem — nem aqui, nem
+# no os-service, nem na execucao. O PDF da entrega afirmava o contrario.
+#
+# Pipeline que existe e nao roda e o problema da Fase 3 em outra forma.
 
 on:
   push:
     branches: [main, homolog]
   pull_request:
     branches: [main, homolog]
+  workflow_dispatch:
 
 jobs:
-  test:
-    name: Build & Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+  ci:
+    uses: Ralima0711/oficina-infra-fase4/.github/workflows/ci-cd-servico.yml@main
+    with:
+      servico: billing-service
+      php-version: "8.4"
 
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.4"
-          extensions: mbstring, pdo_sqlite
-          coverage: none
+      # sockets porque o php-amqplib 3.7.5 declara ext-sockets no composer.lock
+      # — sem ela o proprio composer install falha. pcntl para o SIGTERM do
+      # ConsumirFila. Os mesmos motivos que estao no Dockerfile.
+      extensoes: "mbstring, pdo_sqlite, pdo_pgsql, sockets, pcntl"
 
-      - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist
+      # sqlite, que e o que a suite ja usava. Trocar para pgsql exige conferir
+      # que os testes deste servico rodam contra Postgres de verdade, e isso e
+      # decisao de quem conhece a suite.
+      db-connection: sqlite
 
-      - name: Prepare env
-        run: |
-          cp .env.example .env
-          php artisan key:generate
+      # PROVISORIO: numero escolhido sem ter medido a cobertura deste servico.
+      # Gate baixo que roda vale mais que gate alto que nao existe. Medir e
+      # subir e tarefa do dono do servico.
+      cobertura-minima: 50
 
-      - name: Run tests
-        run: php artisan test
+      sonar-project-key: ""
+
+      imagem: ralima0711/oficina-billing-service
+      manifestos: k8s/billing-service
+      deploy: false
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      KUBECONFIG: ${{ secrets.KUBECONFIG }}

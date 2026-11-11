@@ -31,6 +31,14 @@ class ProcessarGerarOrcamento implements ConsumidorDeComando
         }
 
         if ($this->caixa->jaProcessada($messageId)) {
+            // Reentrega: o efeito ja aconteceu, so republica o que ficou
+            // pendente. Logar isso e o que permite distinguir, no incidente,
+            // duplicata tratada de mensagem perdida.
+            Log::info('Comando repetido descartado', [
+                'messageId' => $messageId,
+                'tipo' => 'GerarOrcamento',
+            ]);
+
             $this->caixa->publicarPendentes($messageId);
 
             return;
@@ -55,6 +63,13 @@ class ProcessarGerarOrcamento implements ConsumidorDeComando
 
                 $falha = $this->motivoDeFalha($body);
                 if ($falha !== null) {
+                    Log::info('Orcamento recusado', [
+                        'messageId' => $messageId,
+                        'osId' => $osId,
+                        'motivo' => $falha[0],
+                        'detalhe' => $falha[1],
+                    ]);
+
                     $this->caixa->gravar($mensagem, 'orcamento.falhou', $this->corpoFalha($osId, $falha[0], $falha[1]));
 
                     return;
@@ -63,12 +78,28 @@ class ProcessarGerarOrcamento implements ConsumidorDeComando
                 try {
                     $orcamento = $this->gerar->executar($this->ajustarAcessorios($body));
                 } catch (ItemSemPreco $e) {
+                    Log::info('Orcamento recusado', [
+                        'messageId' => $messageId,
+                        'osId' => $osId,
+                        'motivo' => 'item_fora_do_catalogo',
+                        'detalhe' => $e->getMessage(),
+                    ]);
+
                     $this->caixa->gravar($mensagem, 'orcamento.falhou', $this->corpoFalha($osId, 'item_fora_do_catalogo', $e->getMessage()));
 
                     return;
                 }
 
-                $this->caixa->gravar($mensagem, 'orcamento.gerado', $orcamento->paraEvento());
+                $evento = $orcamento->paraEvento();
+
+                Log::info('Orcamento gerado', [
+                    'messageId' => $messageId,
+                    'osId' => $osId,
+                    'orcamentoId' => $evento['orcamentoId'] ?? null,
+                    'valorTotal' => $evento['valorTotal'] ?? null,
+                ]);
+
+                $this->caixa->gravar($mensagem, 'orcamento.gerado', $evento);
             });
         } catch (UniqueConstraintViolationException) {
             $this->caixa->publicarPendentes($messageId);
