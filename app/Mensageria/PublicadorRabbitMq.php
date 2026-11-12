@@ -13,7 +13,7 @@ class PublicadorRabbitMq implements PublicadorEventos
         private readonly string $exchange,
     ) {}
 
-    public function publicar(string $routingKey, array $envelope, ?string $traceparent): void
+    public function publicar(string $routingKey, array $envelope, ?string $traceparent, ?string $tracestate = null): void
     {
         $propriedades = [
             'content_type' => 'application/json',
@@ -22,10 +22,18 @@ class PublicadorRabbitMq implements PublicadorEventos
             'message_id' => $envelope['header']['messageId'] ?? null,
         ];
 
+        $amqp = [];
+
         if (is_string($traceparent) && $traceparent !== '') {
-            $propriedades['application_headers'] = new AMQPTable([
-                'traceparent' => $traceparent,
-            ]);
+            $amqp['traceparent'] = $traceparent;
+        }
+
+        if (is_string($tracestate) && $tracestate !== '') {
+            $amqp['tracestate'] = $tracestate;
+        }
+
+        if ($amqp !== []) {
+            $propriedades['application_headers'] = new AMQPTable($amqp);
         }
 
         $this->canal->basic_publish(

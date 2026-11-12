@@ -14,10 +14,12 @@ class GerarOrcamento
      * @param  string|null  $sagaId  header.sagaId do comando; null quando o
      *                               orcamento vem do POST /api/orcamentos, que
      *                               nao pertence a saga nenhuma
+     * @param  string|null  $traceparent  traceparent do comando, pai da decisão
+     *                                    que o cliente toma depois
      */
-    public function executar(array $comando, ?string $sagaId = null): Orcamento
+    public function executar(array $comando, ?string $sagaId = null, ?string $traceparent = null): Orcamento
     {
-        return DB::transaction(function () use ($comando, $sagaId) {
+        return DB::transaction(function () use ($comando, $sagaId, $traceparent) {
             $itens = [];
             $total = 0.0;
 
@@ -36,6 +38,7 @@ class GerarOrcamento
             $orcamento = Orcamento::query()->create([
                 'os_id' => $comando['osId'],
                 'saga_id' => $sagaId,
+                'traceparent' => is_string($traceparent) && $traceparent !== '' ? $traceparent : null,
                 'cliente_id' => $comando['clienteId'],
                 'descricao_problema' => $comando['descricaoProblema'],
                 'veiculo' => $comando['veiculo'],

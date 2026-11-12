@@ -9,6 +9,7 @@ use App\Models\Orcamento;
 use App\Services\ProcessarGerarOrcamento;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\PublicadorFake;
+use Tests\Support\Traceparent;
 use Tests\TestCase;
 
 class ConsumirGerarOrcamentoTest extends TestCase
@@ -49,7 +50,9 @@ class ConsumirGerarOrcamentoTest extends TestCase
         $this->assertSame('orcamento.gerado', $evento['envelope']['header']['type']);
         $this->assertSame('33333333-3333-3333-3333-333333333333', $evento['envelope']['header']['causationId']);
         $this->assertSame('44444444-4444-4444-4444-444444444444', $evento['envelope']['header']['sagaId']);
-        $this->assertSame('00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01', $evento['traceparent']);
+        $this->assertSame('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', Traceparent::traceId($evento['traceparent']));
+        $this->assertNotSame('bbbbbbbbbbbbbbbb', Traceparent::spanId($evento['traceparent']));
+        $this->assertSame($evento['traceparent'], $evento['envelope']['header']['traceparent']);
         $this->assertSame(241.8, $evento['envelope']['body']['valorTotal']);
         $this->assertNotNull(MensagemSaida::query()->whereNotNull('publicado_em')->first());
     }

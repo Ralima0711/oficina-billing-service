@@ -62,9 +62,11 @@ class ProcessarGerarOrcamento implements ConsumidorDeComando
 
                 try {
                     $sagaId = $mensagem['header']['sagaId'] ?? null;
+                    $traceparent = $mensagem['header']['traceparent'] ?? null;
                     $orcamento = $this->gerar->executar(
                         $this->ajustarAcessorios($body),
                         is_string($sagaId) && $sagaId !== '' ? $sagaId : null,
+                        is_string($traceparent) && $traceparent !== '' ? $traceparent : null,
                     );
                 } catch (ItemSemPreco $e) {
                     $this->caixa->gravar($mensagem, 'orcamento.falhou', $this->corpoFalha($osId, 'item_fora_do_catalogo', $e->getMessage()));

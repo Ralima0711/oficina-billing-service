@@ -8,6 +8,7 @@ use App\Models\Orcamento;
 use App\Services\ProcessarGerarOrcamento;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\PublicadorFake;
+use Tests\Support\Traceparent;
 use Tests\TestCase;
 
 /**
@@ -56,6 +57,8 @@ class DecisaoOrcamentoTest extends TestCase
         // O sagaId e o que faz o evento voltar para a saga certa: sem ele o
         // Orchestrator do OS descarta em sagaAtiva().
         $this->assertSame(self::SAGA, $evento['envelope']['header']['sagaId']);
+        $this->assertSame('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', Traceparent::traceId($evento['traceparent']));
+        $this->assertSame($evento['traceparent'], $evento['envelope']['header']['traceparent']);
 
         $corpo = $evento['envelope']['body'];
         $this->assertSame(self::OS, $corpo['osId']);
@@ -275,6 +278,11 @@ class DecisaoOrcamentoTest extends TestCase
         $orcamento = Orcamento::query()->where('os_id', self::OS)->firstOrFail();
 
         $this->assertSame(self::SAGA, $orcamento->saga_id, 'GerarOrcamento precisa gravar o saga_id do header.');
+        $this->assertSame(
+            '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01',
+            $orcamento->traceparent,
+            'O traceparent do comando fica no orçamento para a decisão continuar a saga.',
+        );
 
         return $orcamento;
     }

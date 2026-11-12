@@ -91,6 +91,7 @@ class RegistrarDecisaoOrcamento
                 ],
                 $routingKey,
                 $corpo,
+                is_string($orcamento->traceparent) && $orcamento->traceparent !== '' ? $orcamento->traceparent : null,
             );
 
             return $orcamento;
