@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\DecisaoNaoAplicavel;
 use App\Http\Requests\DecidirOrcamentoRequest;
 use App\Http\Requests\StoreOrcamentoRequest;
 use App\Models\Orcamento;
@@ -103,45 +104,44 @@ class OrcamentoController extends Controller
      * o GET — passaria a resolver CaixaDeSaida e, atras dela, o publicador do
      * RabbitMQ. Gerar e consultar orcamento nao falam com broker nenhum, e nao
      * devem depender de um.
+     *
+     * Nao ha guarda nenhuma aqui: todas rodam dentro da transacao do servico,
+     * sobre a linha com lockForUpdate. Ler o status aqui fora e decidir la
+     * dentro deixa duas chamadas simultaneas passarem as duas — e, como cada
+     * uma gera um messageId proprio, a idempotencia da saga nao as junta.
      */
     public function decidir(
         DecidirOrcamentoRequest $request,
         RegistrarDecisaoOrcamento $decisao,
         string $id,
-    ): JsonResponse
-    {
-        $orcamento = Orcamento::query()->find($id);
+    ): JsonResponse {
+        try {
+            $decisaoId = $decisao->executar($id, $request->aprovou(), $request->motivo());
+        } catch (DecisaoNaoAplicavel $e) {
+            if ($e->motivo === DecisaoNaoAplicavel::NAO_ENCONTRADO) {
+                return response()->json(['erro' => $e->getMessage()], 404);
+            }
 
-        if ($orcamento === null) {
-            return response()->json(['erro' => 'Orcamento nao encontrado.'], 404);
+            // Uma decisao pode ter comitado sem publicar: a transacao grava o
+            // status e a linha do outbox, e a publicacao sai depois do commit.
+            // Se o processo morreu no meio, e ESTA chamada — a repeticao do
+            // cliente depois do 500 — a unica que pode desfazer a perda.
+            // Recusar e so recusar confirmaria a saga parada em
+            // AGUARDANDO_APROVACAO ate o prazo de sete dias expirar.
+            if ($e->motivo === DecisaoNaoAplicavel::JA_DECIDIDO) {
+                $decisao->republicarPendentes($e->decisaoId);
+            }
+
+            return response()->json(array_filter([
+                'erro' => $e->getMessage(),
+                'motivo' => $e->motivo,
+                'status' => $e->status,
+                'decisaoId' => $e->decisaoId,
+                'validoAte' => $e->validoAte,
+            ], fn ($valor) => $valor !== null), 409);
         }
 
-        // Orcamento sem saga veio do POST /api/orcamentos, que e porta avulsa.
-        // Publicar a decisao dele geraria um evento que o Orchestrator do OS
-        // descartaria em sagaAtiva() — melhor recusar aqui e dizer por que.
-        if (! is_string($orcamento->saga_id) || $orcamento->saga_id === '') {
-            return response()->json([
-                'erro' => 'Orcamento sem saga: nao foi gerado pelo comando GerarOrcamento e nao ha saga para decidir.',
-                'status' => $orcamento->status,
-            ], 409);
-        }
-
-        if ($orcamento->status !== 'gerado') {
-            return response()->json([
-                'erro' => 'Orcamento ja decidido ou anulado.',
-                'status' => $orcamento->status,
-            ], 409);
-        }
-
-        if ($orcamento->valido_ate->isPast()) {
-            return response()->json([
-                'erro' => 'Prazo de aprovacao vencido.',
-                'validoAte' => $orcamento->valido_ate->utc()->format('Y-m-d\TH:i:s\Z'),
-                'status' => $orcamento->status,
-            ], 409);
-        }
-
-        $decisaoId = $decisao->executar($orcamento, $request->aprovou(), $request->motivo());
+        $orcamento = Orcamento::query()->findOrFail($id);
 
         // 202 e nao 200: o que esta pronto e o registro da decisao. O efeito na
         // OS vem depois, por mensagem.

@@ -20,6 +20,21 @@ class CaixaDeSaida
         return MensagemSaida::query()->where('mensagem_entrada_id', $messageId)->exists();
     }
 
+    /**
+     * Ha saida gravada e ainda nao publicada para esta entrada.
+     *
+     * Serve ao caminho em que a transacao comitou e a publicacao nao
+     * aconteceu: no consumo de fila o broker reentrega e o publicarPendentes
+     * roda de novo, mas uma decisao que nasce no HTTP nao tem quem reentregue.
+     */
+    public function temSaidaPendente(string $messageId): bool
+    {
+        return MensagemSaida::query()
+            ->where('mensagem_entrada_id', $messageId)
+            ->whereNull('publicado_em')
+            ->exists();
+    }
+
     public function registrar(string $messageId, string $tipo): void
     {
         MensagemProcessada::query()->create([

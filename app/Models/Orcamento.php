@@ -22,6 +22,7 @@ class Orcamento extends Model
         'moeda',
         'valido_ate',
         'status',
+        'decisao_id',
     ];
 
     protected function casts(): array

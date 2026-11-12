@@ -109,6 +109,58 @@ class DecisaoOrcamentoTest extends TestCase
         $this->assertCount(1, $this->eventosDeDecisao());
     }
 
+    public function test_decisao_fica_gravada_no_orcamento(): void
+    {
+        $orcamento = $this->orcamentoDaSaga();
+
+        $resposta = $this->postJson("/api/orcamentos/{$orcamento->id}/decisao", ['decisao' => 'aprovar'])
+            ->assertAccepted();
+
+        $this->assertSame($resposta->json('decisaoId'), $orcamento->fresh()->decisao_id);
+    }
+
+    /**
+     * O caso que o 409 sozinho transformava em perda definitiva.
+     *
+     * A transacao grava status e a linha do outbox; a publicacao sai depois do
+     * commit. Se o processo morre no meio, o orcamento fica decidido e o
+     * evento fica com publicado_em nulo. Num comando de fila o broker
+     * reentrega a mesma messageId e o publicarPendentes roda de novo — numa
+     * decisao que nasce no HTTP nao ha quem reentregue, e o Billing nao tem
+     * varredor de mensagens_saida. A repeticao do cliente depois do 500 e a
+     * unica chance de corrigir.
+     */
+    public function test_409_de_ja_decidido_republica_a_saida_que_ficou_pendente(): void
+    {
+        $orcamento = $this->orcamentoDaSaga();
+
+        $this->postJson("/api/orcamentos/{$orcamento->id}/decisao", ['decisao' => 'aprovar'])
+            ->assertAccepted();
+
+        $decisaoId = $orcamento->fresh()->decisao_id;
+
+        // Encena a morte entre o commit e a publicacao.
+        MensagemSaida::query()
+            ->where('mensagem_entrada_id', $decisaoId)
+            ->update(['publicado_em' => null]);
+        $this->publicador->eventos = [];
+
+        $this->postJson("/api/orcamentos/{$orcamento->id}/decisao", ['decisao' => 'aprovar'])
+            ->assertStatus(409)
+            ->assertJsonPath('motivo', 'ja_decidido')
+            ->assertJsonPath('decisaoId', $decisaoId);
+
+        $evento = $this->eventoDeDecisao();
+        $this->assertSame('orcamento.aprovado', $evento['routingKey']);
+        $this->assertSame($orcamento->id, $evento['envelope']['body']['orcamentoId']);
+
+        $this->assertSame(
+            0,
+            MensagemSaida::query()->whereNull('publicado_em')->count(),
+            'Nenhuma saida pode ficar pendente depois da republicacao.'
+        );
+    }
+
     public function test_orcamento_anulado_nao_pode_ser_decidido(): void
     {
         $orcamento = $this->orcamentoDaSaga();
