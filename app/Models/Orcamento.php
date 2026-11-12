@@ -14,6 +14,7 @@ class Orcamento extends Model
 
     protected $fillable = [
         'os_id',
+        'saga_id',
         'cliente_id',
         'descricao_problema',
         'veiculo',
@@ -21,6 +22,7 @@ class Orcamento extends Model
         'moeda',
         'valido_ate',
         'status',
+        'decisao_id',
     ];
 
     protected function casts(): array

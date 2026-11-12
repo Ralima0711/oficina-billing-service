@@ -9,9 +9,15 @@ class GerarOrcamento
 {
     public function __construct(private readonly TabelaPrecos $precos) {}
 
-    public function executar(array $comando): Orcamento
+    /**
+     * @param  array<string, mixed>  $comando  body do comando GerarOrcamento
+     * @param  string|null  $sagaId  header.sagaId do comando; null quando o
+     *                               orcamento vem do POST /api/orcamentos, que
+     *                               nao pertence a saga nenhuma
+     */
+    public function executar(array $comando, ?string $sagaId = null): Orcamento
     {
-        return DB::transaction(function () use ($comando) {
+        return DB::transaction(function () use ($comando, $sagaId) {
             $itens = [];
             $total = 0.0;
 
@@ -29,6 +35,7 @@ class GerarOrcamento
 
             $orcamento = Orcamento::query()->create([
                 'os_id' => $comando['osId'],
+                'saga_id' => $sagaId,
                 'cliente_id' => $comando['clienteId'],
                 'descricao_problema' => $comando['descricaoProblema'],
                 'veiculo' => $comando['veiculo'],
