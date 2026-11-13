@@ -11,7 +11,7 @@ class PublicadorFake implements PublicadorEventos
 
     public int $falhas = 0;
 
-    public function publicar(string $routingKey, array $envelope, ?string $traceparent): void
+    public function publicar(string $routingKey, array $envelope, ?string $traceparent, ?string $tracestate = null): void
     {
         if ($this->falhas > 0) {
             $this->falhas--;
@@ -23,6 +23,7 @@ class PublicadorFake implements PublicadorEventos
             'routingKey' => $routingKey,
             'envelope' => $envelope,
             'traceparent' => $traceparent,
+            'tracestate' => $tracestate,
         ];
     }
 }

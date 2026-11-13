@@ -7,6 +7,7 @@ use App\Exceptions\MensagemIlegivel;
 use App\Mensageria\ConexaoRabbit;
 use App\Mensageria\ConsumidorDeComando;
 use App\Mensageria\Envelope;
+use App\Mensageria\MessageTracing;
 use App\Mensageria\PublicadorEventos;
 use App\Mensageria\PublicadorRabbitMq;
 use App\Services\ProcessarAnularOrcamento;
@@ -79,8 +80,8 @@ class ConsumirFila extends Command
                 false,
                 false,
                 false,
-                function (AMQPMessage $mensagem) use ($processar, $canal, $once, &$processou) {
-                    $this->tratar($mensagem, $processar, $canal);
+                function (AMQPMessage $mensagem) use ($processar, $canal, $once, $fila, &$processou) {
+                    $this->tratar($mensagem, $processar, $canal, $fila);
                     $processou = $once;
                 },
             );
@@ -143,7 +144,7 @@ class ConsumirFila extends Command
         return array_intersect_key($filas, array_flip($escolhidas));
     }
 
-    private function tratar(AMQPMessage $mensagem, ConsumidorDeComando $processar, AMQPChannel $canal): void
+    private function tratar(AMQPMessage $mensagem, ConsumidorDeComando $processar, AMQPChannel $canal, string $fila): void
     {
         try {
             $dados = json_decode($mensagem->getBody(), true, 512, JSON_THROW_ON_ERROR);
@@ -151,7 +152,18 @@ class ConsumirFila extends Command
                 throw new MensagemIlegivel('corpo não é um objeto JSON.');
             }
 
-            $processar->executar(Envelope::priorizarTraceparent($dados, $this->traceparentAmqp($mensagem)));
+            $headers = $this->headersAmqp($mensagem);
+            $dados = Envelope::priorizarTraceparent($dados, $headers['traceparent'] ?? null);
+            $osId = is_array($dados['body'] ?? null) ? ($dados['body']['osId'] ?? null) : null;
+
+            MessageTracing::consumir(
+                $fila,
+                $headers,
+                function () use ($processar, $dados): void {
+                    $processar->executar($dados);
+                },
+                is_string($osId) ? ['os.id' => $osId] : [],
+            );
             $canal->basic_ack($mensagem->getDeliveryTag());
         } catch (MensagemIlegivel $e) {
             $this->warn($e->getMessage());
@@ -169,16 +181,27 @@ class ConsumirFila extends Command
         }
     }
 
-    private function traceparentAmqp(AMQPMessage $mensagem): ?string
+    /**
+     * @return array<string, string>
+     */
+    private function headersAmqp(AMQPMessage $mensagem): array
     {
         $headers = $mensagem->get('application_headers');
         if (! $headers instanceof AMQPTable) {
-            return null;
+            return [];
         }
 
-        $trace = $headers->getNativeData()['traceparent'] ?? null;
+        $dados = $headers->getNativeData();
+        $saida = [];
 
-        return is_string($trace) && $trace !== '' ? $trace : null;
+        foreach (['traceparent', 'tracestate'] as $chave) {
+            $valor = $dados[$chave] ?? null;
+            if (is_string($valor) && $valor !== '') {
+                $saida[$chave] = $valor;
+            }
+        }
+
+        return $saida;
     }
 
     private function escutarParada(AMQPChannel $canal, bool &$encerrar): void
