@@ -145,6 +145,30 @@ class ConsumirFilaTest extends TestCase
         $this->assertSame($headers['traceparent'], $envelope['header']['traceparent']);
     }
 
+    public function test_mensagem_sem_headers_amqp_e_processada_com_o_trace_do_envelope(): void
+    {
+        // Publicador que nao manda application_headers (ex.: management UI do
+        // RabbitMQ, ou outro cliente AMQP). AMQPMessage::get() lanca
+        // OutOfBoundsException para propriedade ausente; antes do conserto isso
+        // caia no catch generico e o comando ia para a DLQ — a Saga esperava
+        // para sempre o evento de resposta.
+        $mensagem = new AMQPMessage(json_encode($this->comandoGerarOrcamento(), JSON_THROW_ON_ERROR));
+        $mensagem->setDeliveryTag(21);
+        $this->entregas[] = [self::FILA_GERAR, $mensagem];
+
+        $codigo = Artisan::call('fila:consumir', ['--fila' => [self::FILA_GERAR], '--once' => true]);
+
+        $this->assertSame(0, $codigo);
+        $this->assertSame([['tag' => 21]], $this->acks);
+        $this->assertSame([], $this->nacks);
+        $this->assertSame(1, Orcamento::query()->count());
+
+        // Sem header AMQP, vale o traceparent que veio dentro do envelope.
+        $this->assertCount(1, $this->publicados);
+        $envelope = json_decode($this->publicados[0]['mensagem']->getBody(), true);
+        $this->assertSame('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', Traceparent::traceId($envelope['header']['traceparent']));
+    }
+
     public function test_reentrega_do_mesmo_comando_e_confirmada_sem_novo_efeito(): void
     {
         $this->entregar(self::FILA_GERAR, $this->comandoGerarOrcamento(), 1);
