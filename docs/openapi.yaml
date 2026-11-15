@@ -1,0 +1,722 @@
+# Contrato HTTP do Billing Service — OpenAPI 3.0.3.
+#
+# Fonte de verdade sao as rotas em routes/api.php, os controllers
+# (OrcamentoController, PagamentoController), os FormRequests em
+# app/Http/Requests/ e os metodos paraEvento() dos models Orcamento e
+# Pagamento, que montam os corpos de resposta. As anotacoes l5-swagger dos
+# controllers (servidas em /api/documentation) foram o ponto de partida, mas
+# este arquivo foi conferido contra o codigo e contra o servico rodando.
+#
+# Formatos de erro, conforme quem responde:
+#   - validacao do FormRequest: padrao do Laravel ({"message", "errors"}), 422;
+#   - excecao de dominio com handler em bootstrap/app.php (ItemSemPreco,
+#     CobrancaException): {"message"} com 422, 502 ou 503;
+#   - findOrFail: {"message": "No query results for model ..."} com 404;
+#   - decisao do cliente: {"erro", ...} com 404 ou 409, montado no controller.
+#
+# A collection do Postman em docs/postman/ segue este documento. Se uma rota
+# mudar aqui e la nao (ou o contrario), uma delas esta mentindo.
+openapi: 3.0.3
+info:
+  title: Billing Service — Orçamento e Pagamento
+  description: |
+    API do serviço que gera o orçamento, registra a decisão do cliente e
+    cobra pelo Mercado Pago (sandbox) na saga da Fase 4 (ADRs 0007 e 0008 em
+    docs/adrs-fase4.md; payloads em docs/contrato-eventos-fase4.md, v1.1).
+
+    **De onde vem o orçamento.** No fluxo normal ele **não** nasce por HTTP:
+    o OS Service, ao concluir o diagnóstico, grava o comando `GerarOrcamento`
+    no outbox e o Billing o consome da fila `billing.gerar-orcamento`
+    (RabbitMQ), publicando `orcamento.gerado` (ou `orcamento.falhou`). O
+    orçamento gerado assim guarda o `sagaId` do comando.
+    `POST /orcamentos` é a porta avulsa: aceita o mesmo corpo do comando, mas
+    o orçamento sai **sem saga** — serve para consultar preço e testar, e não
+    pode ser decidido (`409 sem_saga`).
+
+    **A decisão do cliente.** `POST /orcamentos/{id}/decisao` é a única
+    entrada humana da saga. Grava o novo status e o evento
+    `orcamento.aprovado` ou `orcamento.recusado` no outbox, na mesma
+    transação, e publica no exchange `oficina.eventos` depois do commit. O OS
+    Service consome o evento e anda a saga sozinho — por isso a resposta é
+    `202`. Sem decisão em 7 dias, a fila `billing.aguardando-aprovacao`
+    expira e a saga compensa com `aprovacao.expirada`.
+
+    **Pagamento.** Depois da aprovação, a saga envia `CobrarPagamento` e o
+    worker do Billing cria a preferência e faz o polling no Mercado Pago. As
+    rotas `/orcamentos/{id}/pagamentos` e `/pagamentos/{id}` fazem o mesmo
+    por HTTP e **chamam o Mercado Pago** com o `MP_ACCESS_TOKEN` configurado.
+
+    **Cabeçalho `Accept: application/json`.** Sem ele, o Laravel responde o
+    `404` em HTML e o `422` de validação como redirect `302`. Todos os
+    exemplos abaixo assumem o cabeçalho.
+
+    **Ids.** Todos os `{id}` são UUID. Um id fora do formato não é validado na
+    borda: chega ao Postgres e volta `500` (`invalid input syntax for type
+    uuid`).
+
+    Com `APP_DEBUG=true` os corpos de `404`/`500` gerados pelo Laravel trazem
+    também `exception`, `file`, `line` e `trace`.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8000/api
+    description: Local (artisan serve). No docker compose do oficina-infra-fase4, http://localhost:8082/api
+  - url: /api
+    description: Pelo gateway Kong, no cluster (strip_path desligado; só /api/orcamentos e /api/pagamentos são roteados)
+
+# Sem autenticação no serviço: o Kong não aplica o plugin jwt às rotas do
+# Billing (k8s/base/20-kong.yaml no oficina-infra-fase4).
+security: []
+
+tags:
+  - name: Saúde
+    description: Verificação de vida do processo.
+  - name: Orçamentos
+    description: Consulta do orçamento e decisão do cliente (entrada humana da saga).
+  - name: Pagamentos
+    description: Cobrança no sandbox do Mercado Pago — estas rotas chamam a API do Mercado Pago.
+
+paths:
+  /health:
+    get:
+      tags: [Saúde]
+      summary: Verificação de vida da aplicação
+      description: |
+        Não consulta banco nem broker. Não é roteado pelo Kong — use direto
+        no serviço.
+      operationId: health
+      responses:
+        '200':
+          description: Aplicação de pé.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+              example:
+                status: ok
+
+  /orcamentos:
+    post:
+      tags: [Orçamentos]
+      summary: Gera um orçamento avulso (sem saga)
+      description: |
+        Mesmo corpo do comando `GerarOrcamento` (contrato v1.1). O preço
+        **não** vem no corpo: cada item é procurado no catálogo local
+        `catalogo_precos` por `tipo` e `descricao` (sem diferenciar
+        maiúsculas). Validade de 7 dias a partir de agora, status `gerado`.
+
+        Responde com o corpo do evento `orcamento.gerado`, mas **não publica
+        evento** e o orçamento fica sem `sagaId`: não pode ser decidido
+        (`POST /orcamentos/{id}/decisao` responde `409 sem_saga`). No fluxo
+        real o orçamento nasce do comando `GerarOrcamento` na fila
+        `billing.gerar-orcamento`.
+      operationId: gerarOrcamento
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GerarOrcamento'
+            example:
+              osId: 0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a70
+              clienteId: 0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a7b
+              veiculo:
+                placa: DEM1A23
+                modelo: Corolla
+                ano: 2020
+              descricaoProblema: Barulho no freio dianteiro
+              itensDiagnosticados:
+                - descricao: Parafuso
+                  tipo: peca
+                  quantidade: 2
+                - descricao: Alinhamento
+                  tipo: servico
+                  quantidade: 1
+      responses:
+        '201':
+          description: Orçamento gravado. Corpo do evento `orcamento.gerado`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Orcamento'
+              example:
+                osId: 0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a70
+                orcamentoId: 01a1df0a-d6ea-7048-bd85-dd84a77b40c0
+                valorTotal: 103
+                moeda: BRL
+                validoAte: '2026-11-22T11:49:51Z'
+                itens:
+                  - descricao: Parafuso
+                    tipo: peca
+                    quantidade: 2
+                    valorUnitario: 1.5
+                  - descricao: Alinhamento
+                    tipo: servico
+                    quantidade: 1
+                    valorUnitario: 100
+        '422':
+          description: |
+            Dois formatos:
+            - erro de validação do Laravel (`{"message", "errors"}`): campo
+              obrigatório ausente, UUID inválido, `itensDiagnosticados` vazio,
+              `tipo` fora de `peca|servico`, `quantidade` < 1;
+            - item fora do catálogo (`ItemSemPreco`): só `{"message"}`. Nada é
+              gravado — a transação é desfeita.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/ErroValidacao'
+                  - $ref: '#/components/schemas/ErroMensagem'
+              examples:
+                validacao:
+                  summary: Validação
+                  value:
+                    message: The itens diagnosticados field is required.
+                    errors:
+                      itensDiagnosticados:
+                        - The itens diagnosticados field is required.
+                itemForaDoCatalogo:
+                  summary: Item fora do catálogo
+                  value:
+                    message: Item "Turbo" do tipo peca não está no catálogo de preços do billing.
+
+  /orcamentos/{id}:
+    get:
+      tags: [Orçamentos]
+      summary: Consulta um orçamento
+      description: |
+        Devolve o orçamento no formato do evento `orcamento.gerado`, venha ele
+        da saga ou do `POST /orcamentos`. O status (`gerado`, `aprovado`,
+        `recusado`, `anulado`) **não** faz parte deste corpo: ele aparece na
+        resposta da decisão.
+      operationId: consultarOrcamento
+      parameters:
+        - $ref: '#/components/parameters/OrcamentoId'
+      responses:
+        '200':
+          description: Orçamento encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Orcamento'
+        '404':
+          $ref: '#/components/responses/ModeloNaoEncontrado'
+
+  /orcamentos/{id}/decisao:
+    post:
+      tags: [Orçamentos]
+      summary: Registra a decisão do cliente e publica orcamento.aprovado ou orcamento.recusado
+      description: |
+        Porta de entrada da decisão humana da saga. Dentro de uma transação,
+        com a linha do orçamento travada (`lockForUpdate`):
+
+        1. confere que o orçamento existe, tem `sagaId`, está `gerado` e
+           dentro do prazo (`validoAte`);
+        2. muda o status para `aprovado` ou `recusado`, grava o `decisaoId`;
+        3. grava no outbox o evento `orcamento.aprovado` ou
+           `orcamento.recusado` (`messageId` = `decisaoId`, `sagaId` do
+           orçamento, `traceparent` do comando que gerou o orçamento).
+
+        Depois do commit o evento é publicado em `oficina.eventos`; o OS
+        Service o consome e anda a saga (aprovado → `CobrarPagamento`;
+        recusado → compensação e OS `CANCELADA`).
+
+        `motivo` só vale na recusa: numa aprovação ele é descartado (regra
+        `exclude_if`) e nunca é publicado.
+
+        **Repetição.** Uma segunda decisão sobre o mesmo orçamento volta `409`
+        com `motivo: ja_decidido` e o `decisaoId` original. Nesse caminho o
+        serviço republica o evento da primeira decisão se ele tiver ficado
+        pendente no outbox (processo morto entre o commit e a publicação) —
+        o retry do cliente é o que desfaz a perda.
+      operationId: decidirOrcamento
+      parameters:
+        - $ref: '#/components/parameters/OrcamentoId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecidirOrcamento'
+            examples:
+              aprovar:
+                summary: Aprovação
+                value:
+                  decisao: aprovar
+              recusar:
+                summary: Recusa com motivo
+                value:
+                  decisao: recusar
+                  motivo: Valor acima do esperado
+      responses:
+        '202':
+          description: |
+            Decisão registrada e evento gravado no outbox. O efeito na OS vem
+            depois, por mensagem.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisaoRegistrada'
+              example:
+                decisaoId: 7f3e2a1b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                orcamentoId: 01a1df0a-d6ea-7048-bd85-dd84a77b40c0
+                osId: 0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a70
+                status: recusado
+        '404':
+          description: Orçamento não encontrado (formato próprio da decisão, não o do Laravel).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Erro'
+              example:
+                erro: Orcamento nao encontrado.
+        '409':
+          description: |
+            A decisão não se aplica a este orçamento. `motivo` diz por quê:
+            - `sem_saga`: orçamento avulso (`POST /orcamentos`), sem saga para
+              decidir;
+            - `ja_decidido`: já aprovado, recusado ou anulado — traz o
+              `decisaoId` da decisão anterior, quando houve;
+            - `prazo_vencido`: passou do `validoAte` — traz o `validoAte`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErroDecisao'
+              examples:
+                semSaga:
+                  summary: Orçamento avulso
+                  value:
+                    erro: 'Orcamento sem saga: nao foi gerado pelo comando GerarOrcamento e nao ha saga para decidir.'
+                    motivo: sem_saga
+                    status: gerado
+                jaDecidido:
+                  summary: Decisão repetida
+                  value:
+                    erro: Orcamento ja decidido ou anulado.
+                    motivo: ja_decidido
+                    status: recusado
+                    decisaoId: 7f3e2a1b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                prazoVencido:
+                  summary: Prazo vencido
+                  value:
+                    erro: Prazo de aprovacao vencido.
+                    motivo: prazo_vencido
+                    status: gerado
+                    validoAte: '2026-11-22T11:49:51Z'
+        '422':
+          description: Erro de validação (`decisao` ausente ou fora de `aprovar|recusar`, `motivo` > 255).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErroValidacao'
+              example:
+                message: decisao deve ser "aprovar" ou "recusar".
+                errors:
+                  decisao:
+                    - decisao deve ser "aprovar" ou "recusar".
+
+  /orcamentos/{id}/pagamentos:
+    post:
+      tags: [Pagamentos]
+      summary: Cria (ou reaproveita) a preferência de pagamento no Mercado Pago
+      description: |
+        **Chama o Mercado Pago** (`POST /checkout/preferences`, com
+        `external_reference` = `orcamentoId` e o `valorTotal` do orçamento).
+
+        Idempotente por orçamento: se já existe pagamento `pendente` ou
+        `confirmado` para ele (restrição única no banco), reaproveita e
+        responde `200` em vez de criar outro. Não confere o status do
+        orçamento — no fluxo da saga, quem cobra é o comando `CobrarPagamento`
+        depois da aprovação.
+
+        Não tem corpo de requisição.
+      operationId: criarPreferencia
+      parameters:
+        - $ref: '#/components/parameters/OrcamentoId'
+      responses:
+        '201':
+          description: Pagamento criado, preferência criada no Mercado Pago.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagamentoPendente'
+              example:
+                osId: 0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a70
+                pagamentoId: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f
+                orcamentoId: 01a1df0a-d6ea-7048-bd85-dd84a77b40c0
+                status: pendente
+                sandboxInitPoint: https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=123456789-abcd
+        '200':
+          description: |
+            Já havia pagamento ativo para o orçamento. Se ainda pendente, volta
+            o corpo `pendente`; se confirmado, o corpo de
+            `pagamento.confirmado`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PagamentoPendente'
+                  - $ref: '#/components/schemas/PagamentoConcluido'
+        '404':
+          $ref: '#/components/responses/ModeloNaoEncontrado'
+        '422':
+          description: Orçamento com valor zero não gera cobrança.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErroMensagem'
+              example:
+                message: Orçamento sem valor não gera cobrança no Mercado Pago.
+        '502':
+          $ref: '#/components/responses/FalhaMercadoPago'
+        '503':
+          $ref: '#/components/responses/SemTokenMercadoPago'
+
+  /pagamentos/{id}:
+    get:
+      tags: [Pagamentos]
+      summary: Consulta o pagamento no Mercado Pago e devolve o corpo do evento
+      description: |
+        Se o pagamento ainda não é terminal, **chama o Mercado Pago**
+        (`GET /v1/payments/search` por `external_reference` = `orcamentoId`)
+        e atualiza o estado local: `approved` vira `confirmado`; `rejected` ou
+        `cancelled` viram `recusado`; o resto continua `pendente`.
+
+        **Não é uma leitura pura:** cada consulta de pagamento pendente conta
+        como uma tentativa do polling. Atingido `MP_POLL_MAX_ATTEMPTS`
+        (padrão 20), o pagamento passa a `recusado` com `motivo: timeout`.
+        Pagamento já `confirmado` ou `recusado` volta do banco, sem chamar o
+        Mercado Pago.
+
+        O corpo não tem campo de status nos casos terminais — é o corpo do
+        evento `pagamento.confirmado` / `pagamento.recusado`; o recusado se
+        distingue por trazer `motivo`.
+      operationId: consultarPagamento
+      parameters:
+        - $ref: '#/components/parameters/PagamentoId'
+      responses:
+        '200':
+          description: Pendente, confirmado ou recusado.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PagamentoPendente'
+                  - $ref: '#/components/schemas/PagamentoConcluido'
+              examples:
+                pendente:
+                  summary: Ainda sem pagamento no Mercado Pago
+                  value:
+                    osId: 0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a70
+                    pagamentoId: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f
+                    orcamentoId: 01a1df0a-d6ea-7048-bd85-dd84a77b40c0
+                    status: pendente
+                    sandboxInitPoint: https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=123456789-abcd
+                confirmado:
+                  summary: pagamento.confirmado
+                  value:
+                    osId: 0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a70
+                    pagamentoId: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f
+                    orcamentoId: 01a1df0a-d6ea-7048-bd85-dd84a77b40c0
+                    valorPago: 103
+                    metodo: pix
+                    confirmadoEm: '2026-11-15T12:20:00Z'
+                recusado:
+                  summary: pagamento.recusado (timeout do polling)
+                  value:
+                    osId: 0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a70
+                    pagamentoId: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f
+                    orcamentoId: 01a1df0a-d6ea-7048-bd85-dd84a77b40c0
+                    valorPago: 103
+                    metodo: null
+                    confirmadoEm: '2026-11-15T12:20:00Z'
+                    motivo: timeout
+        '404':
+          $ref: '#/components/responses/ModeloNaoEncontrado'
+        '502':
+          $ref: '#/components/responses/FalhaMercadoPago'
+        '503':
+          $ref: '#/components/responses/SemTokenMercadoPago'
+
+components:
+  parameters:
+    OrcamentoId:
+      name: id
+      in: path
+      required: true
+      description: UUID do orçamento. Fora do formato, o Postgres recusa e a API responde 500.
+      schema:
+        type: string
+        format: uuid
+    PagamentoId:
+      name: id
+      in: path
+      required: true
+      description: UUID do pagamento. Fora do formato, o Postgres recusa e a API responde 500.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    ModeloNaoEncontrado:
+      description: |
+        Recurso não encontrado (`findOrFail` do Laravel). Com `APP_DEBUG=true`
+        o corpo traz também `exception`, `file`, `line` e `trace`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErroMensagem'
+          example:
+            message: No query results for model [App\Models\Orcamento] 00000000-0000-4000-8000-000000000000
+    FalhaMercadoPago:
+      description: |
+        O Mercado Pago respondeu erro (ou a preferência veio sem `id` /
+        `sandbox_init_point`). O pagamento local, se já foi criado, continua
+        `pendente` e uma nova chamada tenta de novo.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErroMensagem'
+          example:
+            message: Mercado Pago respondeu HTTP 401 ao criar ou consultar o pagamento.
+    SemTokenMercadoPago:
+      description: '`MP_ACCESS_TOKEN` não está configurado no serviço.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErroMensagem'
+          example:
+            message: MP_ACCESS_TOKEN não está configurado.
+
+  schemas:
+    TipoItem:
+      type: string
+      description: O contrato só tem peça e serviço; insumo entra como `peca`.
+      enum: [peca, servico]
+
+    GerarOrcamento:
+      type: object
+      description: Corpo do comando `GerarOrcamento` (contrato v1.1).
+      required: [osId, clienteId, veiculo, descricaoProblema, itensDiagnosticados]
+      properties:
+        osId:
+          type: string
+          format: uuid
+        clienteId:
+          type: string
+          format: uuid
+        veiculo:
+          type: object
+          required: [placa]
+          properties:
+            placa:
+              type: string
+              maxLength: 10
+            modelo:
+              type: string
+              maxLength: 120
+              nullable: true
+            ano:
+              type: integer
+              minimum: 1900
+              maximum: 2100
+              nullable: true
+        descricaoProblema:
+          type: string
+        itensDiagnosticados:
+          type: array
+          minItems: 1
+          description: |
+            Obrigatório, com pelo menos um item. Sem preço: o valor sai do
+            catálogo `catalogo_precos` por `tipo` + `descricao`.
+          items:
+            type: object
+            required: [descricao, tipo, quantidade]
+            properties:
+              descricao:
+                type: string
+                description: Nome no catálogo (ex. Parafuso, Filtro de Óleo, Alinhamento, Troca de Óleo).
+              tipo:
+                $ref: '#/components/schemas/TipoItem'
+              quantidade:
+                type: integer
+                minimum: 1
+
+    Orcamento:
+      type: object
+      description: Corpo do evento `orcamento.gerado` (Orcamento::paraEvento()).
+      required: [osId, orcamentoId, valorTotal, moeda, validoAte, itens]
+      properties:
+        osId:
+          type: string
+          format: uuid
+        orcamentoId:
+          type: string
+          format: uuid
+        valorTotal:
+          type: number
+          description: Soma de `valorUnitario * quantidade`. Pode sair sem casas decimais no JSON (ex. 103).
+        moeda:
+          type: string
+          enum: [BRL]
+        validoAte:
+          type: string
+          format: date-time
+          description: Geração + 7 dias, em UTC (`Y-m-d\TH:i:s\Z`).
+        itens:
+          type: array
+          items:
+            type: object
+            required: [descricao, tipo, quantidade, valorUnitario]
+            properties:
+              descricao:
+                type: string
+                description: Como veio no pedido (não normalizada para o nome do catálogo).
+              tipo:
+                $ref: '#/components/schemas/TipoItem'
+              quantidade:
+                type: integer
+              valorUnitario:
+                type: number
+
+    DecidirOrcamento:
+      type: object
+      required: [decisao]
+      properties:
+        decisao:
+          type: string
+          enum: [aprovar, recusar]
+        motivo:
+          type: string
+          maxLength: 255
+          nullable: true
+          description: Só na recusa. Numa aprovação é descartado e não vai no evento.
+
+    DecisaoRegistrada:
+      type: object
+      required: [decisaoId, orcamentoId, osId, status]
+      properties:
+        decisaoId:
+          type: string
+          format: uuid
+          description: Também é o `messageId` do evento publicado — use para rastrear.
+        orcamentoId:
+          type: string
+          format: uuid
+        osId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [aprovado, recusado]
+
+    ErroDecisao:
+      type: object
+      required: [erro, motivo]
+      properties:
+        erro:
+          type: string
+        motivo:
+          type: string
+          enum: [sem_saga, ja_decidido, prazo_vencido]
+        status:
+          type: string
+          description: Status atual do orçamento.
+          enum: [gerado, aprovado, recusado, anulado]
+        decisaoId:
+          type: string
+          format: uuid
+          description: Só em `ja_decidido`, quando houve decisão anterior (orçamento anulado pela saga não tem).
+        validoAte:
+          type: string
+          format: date-time
+          description: Só em `prazo_vencido`.
+
+    PagamentoPendente:
+      type: object
+      required: [osId, pagamentoId, orcamentoId, status, sandboxInitPoint]
+      properties:
+        osId:
+          type: string
+          format: uuid
+        pagamentoId:
+          type: string
+          format: uuid
+        orcamentoId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pendente]
+        sandboxInitPoint:
+          type: string
+          format: uri
+          description: URL do checkout no sandbox do Mercado Pago, para o cliente pagar.
+
+    PagamentoConcluido:
+      type: object
+      description: |
+        Corpo de `pagamento.confirmado` ou `pagamento.recusado`
+        (Pagamento::paraEvento()). Sem campo de status: o recusado é o que
+        traz `motivo`.
+      required: [osId, pagamentoId, orcamentoId, valorPago, metodo, confirmadoEm]
+      properties:
+        osId:
+          type: string
+          format: uuid
+        pagamentoId:
+          type: string
+          format: uuid
+        orcamentoId:
+          type: string
+          format: uuid
+        valorPago:
+          type: number
+        metodo:
+          type: string
+          nullable: true
+          enum: [pix, credito, debito, boleto, null]
+          description: Nulo quando o Mercado Pago não informou (ex. recusa por timeout).
+        confirmadoEm:
+          type: string
+          format: date-time
+          nullable: true
+        motivo:
+          type: string
+          description: |
+            Só na recusa: `status_detail` do Mercado Pago (ex.
+            `cc_rejected_insufficient_amount`) ou `timeout`.
+
+    Erro:
+      type: object
+      required: [erro]
+      properties:
+        erro:
+          type: string
+
+    ErroMensagem:
+      type: object
+      description: Erro renderizado pelo Laravel ou pelos handlers de bootstrap/app.php.
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    ErroValidacao:
+      type: object
+      description: Formato de erro de validação do Laravel.
+      required: [message, errors]
+      properties:
+        message:
+          type: string
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string

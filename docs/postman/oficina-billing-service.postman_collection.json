@@ -1,0 +1,601 @@
+{
+  "info": {
+    "name": "Billing Service — Fase 4",
+    "description": "Collection do Billing Service, derivada de docs/openapi.yaml. Se uma rota mudar num lugar e não no outro, uma delas está mentindo.\n\nTodos os requests mandam `Accept: application/json`: sem ele o Laravel responde 404 em HTML e 422 como redirect 302.\n\nOrdem dos requests:\n1. **Orçamentos** — gera um orçamento avulso (`POST /orcamentos`, sem saga) e grava `orcamentoId`/`osId`; consulta e cobre os erros (422, 404, 409 `sem_saga`).\n2. **Decisão do cliente (saga)** — no fluxo real o orçamento nasce do comando `GerarOrcamento` (RabbitMQ), não do POST. Preencha `orcamentoSagaId` com o `orcamentoId` que o OS Service mostra em `GET /api/ordens-servico/{id}` depois do diagnóstico. A decisão publica `orcamento.aprovado`/`orcamento.recusado` pelo outbox. `decisao` vale `recusar` por padrão: `aprovar` faz a saga enviar `CobrarPagamento`, e o worker do Billing chama o Mercado Pago. Sem `orcamentoSagaId`, a pasta é pulada.\n3. **Pagamentos (Mercado Pago)** — `Criar preferência` e `Consultar pagamento` CHAMAM a API do Mercado Pago com o `MP_ACCESS_TOKEN` do serviço; use só com token de teste (sandbox). Cada consulta de pagamento pendente conta como tentativa do polling. Os requests 404 não chegam ao Mercado Pago.\n\n`baseUrl`: `http://localhost:8000` (artisan serve). No docker compose do oficina-infra-fase4, `http://localhost:8082`. Pelo Kong, a URL do gateway (só /api/orcamentos e /api/pagamentos são roteados).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "orcamentoId",
+      "value": ""
+    },
+    {
+      "key": "osId",
+      "value": ""
+    },
+    {
+      "key": "orcamentoSagaId",
+      "value": ""
+    },
+    {
+      "key": "decisao",
+      "value": "recusar"
+    },
+    {
+      "key": "decisaoId",
+      "value": ""
+    },
+    {
+      "key": "pagamentoId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Saúde",
+      "item": [
+        {
+          "name": "Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orçamentos",
+      "item": [
+        {
+          "name": "Gerar orçamento (avulso, sem saga)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const corpo = pm.response.json();",
+                  "    pm.collectionVariables.set('orcamentoId', corpo.orcamentoId);",
+                  "    pm.collectionVariables.set('osId', corpo.osId);",
+                  "}",
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('corpo de orcamento.gerado', () => {",
+                  "    const c = pm.response.json();",
+                  "    pm.expect(c).to.include.keys('osId', 'orcamentoId', 'valorTotal', 'moeda', 'validoAte', 'itens');",
+                  "    pm.expect(c.moeda).to.eql('BRL');",
+                  "    pm.expect(c.valorTotal).to.eql(103);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"osId\": \"{{$guid}}\",\n  \"clienteId\": \"0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a7b\",\n  \"veiculo\": {\n    \"placa\": \"DEM1A23\",\n    \"modelo\": \"Corolla\",\n    \"ano\": 2020\n  },\n  \"descricaoProblema\": \"Barulho no freio dianteiro\",\n  \"itensDiagnosticados\": [\n    {\n      \"descricao\": \"Parafuso\",\n      \"tipo\": \"peca\",\n      \"quantidade\": 2\n    },\n    {\n      \"descricao\": \"Alinhamento\",\n      \"tipo\": \"servico\",\n      \"quantidade\": 1\n    }\n  ]\n}"
+            },
+            "description": "Mesmo corpo do comando GerarOrcamento. O preço sai do catálogo local. O orçamento fica sem saga: não pode ser decidido."
+          }
+        },
+        {
+          "name": "Consultar orçamento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('mesmo orçamento', () => pm.expect(pm.response.json().orcamentoId).to.eql(pm.collectionVariables.get('orcamentoId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/{{orcamentoId}}"
+          }
+        },
+        {
+          "name": "Gerar orçamento — item fora do catálogo (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('mensagem do catálogo', () => pm.expect(pm.response.json().message).to.include('catálogo'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"osId\": \"{{$guid}}\",\n  \"clienteId\": \"0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a7b\",\n  \"veiculo\": {\n    \"placa\": \"DEM1A23\",\n    \"modelo\": \"Corolla\",\n    \"ano\": 2020\n  },\n  \"descricaoProblema\": \"Barulho no freio dianteiro\",\n  \"itensDiagnosticados\": [\n    {\n      \"descricao\": \"Turbocompressor\",\n      \"tipo\": \"peca\",\n      \"quantidade\": 1\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Gerar orçamento — sem itens (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('erro em itensDiagnosticados', () => pm.expect(pm.response.json().errors).to.have.property('itensDiagnosticados'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"osId\": \"{{$guid}}\",\n  \"clienteId\": \"0d1c2c3e-6f2a-4b8e-9a1b-2c3d4e5f6a7b\",\n  \"veiculo\": {\n    \"placa\": \"DEM1A23\",\n    \"modelo\": \"Corolla\",\n    \"ano\": 2020\n  },\n  \"descricaoProblema\": \"Barulho no freio dianteiro\",\n  \"itensDiagnosticados\": []\n}"
+            }
+          }
+        },
+        {
+          "name": "Orçamento inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/00000000-0000-4000-8000-000000000000"
+          }
+        },
+        {
+          "name": "Decidir orçamento avulso (409 sem_saga)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('motivo sem_saga', () => pm.expect(pm.response.json().motivo).to.eql('sem_saga'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/{{orcamentoId}}/decisao",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decisao\": \"aprovar\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Decisão inválida (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('erro em decisao', () => pm.expect(pm.response.json().errors).to.have.property('decisao'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/{{orcamentoId}}/decisao",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decisao\": \"talvez\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Decidir orçamento inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('formato {erro}', () => pm.expect(pm.response.json()).to.have.property('erro'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/00000000-0000-4000-8000-000000000000/decisao",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decisao\": \"aprovar\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Decisão do cliente (saga)",
+      "description": "Precisa de `orcamentoSagaId`: orçamento gerado pelo comando GerarOrcamento da saga. Sem ele, os requests são pulados.",
+      "item": [
+        {
+          "name": "Decidir orçamento da saga (202)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Precisa de um orçamento gerado pela saga (comando GerarOrcamento).",
+                  "// Pegue o orcamentoId em GET /api/ordens-servico/{id} do OS Service.",
+                  "if (!pm.variables.get('orcamentoSagaId')) {",
+                  "    console.log('orcamentoSagaId vazio: request pulado');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "    pm.collectionVariables.set('decisaoId', pm.response.json().decisaoId);",
+                  "}",
+                  "pm.test('status 202', () => pm.response.to.have.status(202));",
+                  "pm.test('status do orçamento segue a decisão', () => {",
+                  "    const esperado = pm.variables.get('decisao') === 'aprovar' ? 'aprovado' : 'recusado';",
+                  "    pm.expect(pm.response.json().status).to.eql(esperado);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/{{orcamentoSagaId}}/decisao",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decisao\": \"{{decisao}}\",\n  \"motivo\": \"Valor acima do esperado\"\n}"
+            },
+            "description": "Publica orcamento.aprovado ou orcamento.recusado pelo outbox. `motivo` só vai na recusa (na aprovação é descartado)."
+          }
+        },
+        {
+          "name": "Repetir a decisão (409 ja_decidido)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Precisa de um orçamento gerado pela saga (comando GerarOrcamento).",
+                  "// Pegue o orcamentoId em GET /api/ordens-servico/{id} do OS Service.",
+                  "if (!pm.variables.get('orcamentoSagaId')) {",
+                  "    console.log('orcamentoSagaId vazio: request pulado');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('ja_decidido com o decisaoId original', () => {",
+                  "    const c = pm.response.json();",
+                  "    pm.expect(c.motivo).to.eql('ja_decidido');",
+                  "    pm.expect(c.decisaoId).to.eql(pm.collectionVariables.get('decisaoId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/{{orcamentoSagaId}}/decisao",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decisao\": \"{{decisao}}\"\n}"
+            },
+            "description": "A repetição não publica outro evento; republica o da primeira decisão se ele tiver ficado pendente no outbox."
+          }
+        },
+        {
+          "name": "Consultar orçamento da saga",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Precisa de um orçamento gerado pela saga (comando GerarOrcamento).",
+                  "// Pegue o orcamentoId em GET /api/ordens-servico/{id} do OS Service.",
+                  "if (!pm.variables.get('orcamentoSagaId')) {",
+                  "    console.log('orcamentoSagaId vazio: request pulado');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/{{orcamentoSagaId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pagamentos (Mercado Pago)",
+      "description": "Criar preferência e Consultar pagamento CHAMAM a API do Mercado Pago com o MP_ACCESS_TOKEN do serviço. Use só com token de teste (sandbox).",
+      "item": [
+        {
+          "name": "Criar preferência de pagamento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "    pm.collectionVariables.set('pagamentoId', pm.response.json().pagamentoId);",
+                  "}",
+                  "pm.test('201 ou 200', () => pm.expect(pm.response.code).to.be.oneOf([201, 200]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/{{orcamentoId}}/pagamentos",
+            "description": "Chama o Mercado Pago. 201 cria; 200 reaproveita o pagamento pendente/confirmado do mesmo orçamento."
+          }
+        },
+        {
+          "name": "Consultar pagamento",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.variables.get('pagamentoId')) {",
+                  "    console.log('pagamentoId vazio: rode antes \"Criar preferência de pagamento\"');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/pagamentos/{{pagamentoId}}",
+            "description": "Chama o Mercado Pago enquanto o pagamento está pendente, e cada chamada conta como tentativa do polling."
+          }
+        },
+        {
+          "name": "Pagamento inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/pagamentos/00000000-0000-4000-8000-000000000000"
+          }
+        },
+        {
+          "name": "Cobrar orçamento inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/orcamentos/00000000-0000-4000-8000-000000000000/pagamentos"
+          }
+        }
+      ]
+    }
+  ]
+}
