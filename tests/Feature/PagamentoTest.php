@@ -19,6 +19,7 @@ class PagamentoTest extends TestCase
         Http::fake([
             'https://api.mercadopago.com/checkout/preferences' => Http::response([
                 'id' => 'pref-1',
+                'init_point' => 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
                 'sandbox_init_point' => 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
             ], 201),
         ]);
@@ -31,6 +32,7 @@ class PagamentoTest extends TestCase
             ->assertJsonPath('osId', $orcamento['osId'])
             ->assertJsonPath('orcamentoId', $orcamento['orcamentoId'])
             ->assertJsonPath('status', 'pendente')
+            ->assertJsonPath('initPoint', 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1')
             ->assertJsonPath('sandboxInitPoint', 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1');
 
         Http::assertSent(function ($request) use ($orcamento) {
@@ -47,6 +49,7 @@ class PagamentoTest extends TestCase
         Http::fake([
             'https://api.mercadopago.com/checkout/preferences' => Http::response([
                 'id' => 'pref-1',
+                'init_point' => 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
                 'sandbox_init_point' => 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
             ], 201),
         ]);
@@ -119,6 +122,7 @@ class PagamentoTest extends TestCase
         $this->getJson('/api/pagamentos/'.$pagamento->id)
             ->assertOk()
             ->assertJsonPath('status', 'pendente')
+            ->assertJsonPath('initPoint', $pagamento->init_point)
             ->assertJsonPath('sandboxInitPoint', $pagamento->sandbox_init_point);
     }
 
@@ -293,10 +297,15 @@ class PagamentoTest extends TestCase
         $this->assertSame('pendente', $pagamento->fresh()->status);
     }
 
-    public function test_preferencia_sem_sandbox_init_point_e_502(): void
+    public function test_preferencia_sem_init_point_e_502(): void
     {
+        // Sem init_point o cliente nao tem link que funcione com credencial de
+        // usuario de teste: o sandbox_init_point sozinho nao basta.
         Http::fake([
-            'https://api.mercadopago.com/checkout/preferences' => Http::response(['id' => 'pref-1'], 201),
+            'https://api.mercadopago.com/checkout/preferences' => Http::response([
+                'id' => 'pref-1',
+                'sandbox_init_point' => 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
+            ], 201),
         ]);
 
         $orcamento = $this->orcamento();
@@ -310,15 +319,17 @@ class PagamentoTest extends TestCase
         Http::fake([
             'https://api.mercadopago.com/checkout/preferences' => Http::response([
                 'id' => 'pref-9',
+                'init_point' => 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-9',
                 'sandbox_init_point' => 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-9',
             ], 201),
         ]);
         $pagamento = $this->pagamentoPendente();
-        $pagamento->forceFill(['preference_id' => null, 'sandbox_init_point' => null])->save();
+        $pagamento->forceFill(['preference_id' => null, 'init_point' => null, 'sandbox_init_point' => null])->save();
 
         $this->postJson('/api/orcamentos/'.$pagamento->orcamento_id.'/pagamentos')
             ->assertOk()
             ->assertJsonPath('pagamentoId', $pagamento->id)
+            ->assertJsonPath('initPoint', 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-9')
             ->assertJsonPath('sandboxInitPoint', 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-9');
 
         $this->assertSame('pref-9', $pagamento->fresh()->preference_id);
@@ -350,6 +361,7 @@ class PagamentoTest extends TestCase
             'status' => 'pendente',
             'valor' => '241.80',
             'moeda' => 'BRL',
+            'init_point' => 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
             'sandbox_init_point' => 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
         ]);
     }

@@ -316,6 +316,7 @@ class ConsumirCobrarPagamentoTest extends TestCase
         Http::fake([
             'https://api.mercadopago.com/checkout/preferences' => Http::response([
                 'id' => 'pref-1',
+                'init_point' => 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
                 'sandbox_init_point' => 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
             ], 201),
             'https://api.mercadopago.com/v1/payments/search*' => $sequencia,

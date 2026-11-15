@@ -350,6 +350,7 @@ paths:
                 pagamentoId: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f
                 orcamentoId: 01a1df0a-d6ea-7048-bd85-dd84a77b40c0
                 status: pendente
+                initPoint: https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=123456789-abcd
                 sandboxInitPoint: https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=123456789-abcd
         '200':
           description: |
@@ -416,6 +417,7 @@ paths:
                     pagamentoId: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f
                     orcamentoId: 01a1df0a-d6ea-7048-bd85-dd84a77b40c0
                     status: pendente
+                    initPoint: https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=123456789-abcd
                     sandboxInitPoint: https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=123456789-abcd
                 confirmado:
                   summary: pagamento.confirmado
@@ -639,7 +641,7 @@ components:
 
     PagamentoPendente:
       type: object
-      required: [osId, pagamentoId, orcamentoId, status, sandboxInitPoint]
+      required: [osId, pagamentoId, orcamentoId, status, initPoint, sandboxInitPoint]
       properties:
         osId:
           type: string
@@ -653,10 +655,20 @@ components:
         status:
           type: string
           enum: [pendente]
+        initPoint:
+          type: string
+          format: uri
+          description: |
+            URL do checkout que o cliente deve abrir para pagar. Com credencial de
+            usuario de teste do Mercado Pago (APP_USR- de um TESTUSER), e o unico
+            link que funciona: pague numa janela anonima, logado com o comprador
+            de teste. Verificado em 15/11/2026.
         sandboxInitPoint:
           type: string
           format: uri
-          description: URL do checkout no sandbox do Mercado Pago, para o cliente pagar.
+          description: |
+            URL do checkout no dominio sandbox. Mantida por compatibilidade; com
+            credencial de usuario de teste ela responde "Ops, ocorreu um erro".
 
     PagamentoConcluido:
       type: object

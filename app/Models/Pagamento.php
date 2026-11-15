@@ -23,6 +23,7 @@ class Pagamento extends Model
         'metodo',
         'motivo',
         'sandbox_init_point',
+        'init_point',
         'confirmado_em',
         'tentativas',
     ];

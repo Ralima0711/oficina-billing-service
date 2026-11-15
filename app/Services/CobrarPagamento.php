@@ -119,7 +119,8 @@ class CobrarPagamento
         );
 
         $pagamento->preference_id = $preferencia['id'];
-        $pagamento->sandbox_init_point = $preferencia['sandbox_init_point'];
+        $pagamento->init_point = $preferencia['init_point'];
+        $pagamento->sandbox_init_point = $preferencia['sandbox_init_point'] ?? null;
         $pagamento->save();
 
         return $pagamento;

@@ -323,9 +323,15 @@ final class FeatureContext implements Context
         Assert::assertSame($motivo, $this->eventoPublicado($tipo)['envelope']['body']['motivo']);
     }
 
-    #[Then('a resposta traz o link do sandbox')]
-    public function aRespostaTrazOLinkDoSandbox(): void
+    #[Then('a resposta traz o link de checkout')]
+    public function aRespostaTrazOLinkDeCheckout(): void
     {
+        // initPoint e o link que funciona com credencial de usuario de teste;
+        // o do sandbox continua na resposta, mas nao e o que o cliente abre.
+        Assert::assertStringContainsString(
+            'www.mercadopago.com',
+            (string) $this->resposta->json('initPoint'),
+        );
         Assert::assertStringContainsString(
             'sandbox.mercadopago.com',
             (string) $this->resposta->json('sandboxInitPoint'),
@@ -415,6 +421,7 @@ final class FeatureContext implements Context
         Http::fake([
             'https://api.mercadopago.com/checkout/preferences' => Http::response([
                 'id' => 'pref-1',
+                'init_point' => 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
                 'sandbox_init_point' => 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-1',
             ], 201),
         ]);

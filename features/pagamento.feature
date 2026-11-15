@@ -8,7 +8,7 @@ Funcionalidade: Cobrança no Mercado Pago
     Quando eu crio a cobrança desse orçamento
     Então a resposta deve ter o código "201"
     E o status da resposta é "pendente"
-    E a resposta traz o link do sandbox
+    E a resposta traz o link de checkout
 
   Cenário: Cobrar de novo reaproveita a preferência pendente
     Dado um orçamento gerado
