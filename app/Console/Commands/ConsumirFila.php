@@ -166,13 +166,7 @@ class ConsumirFila extends Command
 
             $headers = $this->headersAmqp($mensagem);
             $dados = Envelope::priorizarTraceparent($dados, $headers['traceparent'] ?? null);
-            // Em divergencia o header AMQP vence; na ausencia dele, vale o do
-            // envelope (contrato de observabilidade). Sem isto o span de consumo
-            // abriria um trace novo, desligado da Saga.
-            $traceEnvelope = $dados['header']['traceparent'] ?? null;
-            if (! isset($headers['traceparent']) && is_string($traceEnvelope) && $traceEnvelope !== '') {
-                $headers['traceparent'] = $traceEnvelope;
-            }
+            $headers = $this->comTraceDoEnvelope($headers, $dados);
             $osId = is_array($dados['body'] ?? null) ? ($dados['body']['osId'] ?? null) : null;
 
             MessageTracing::consumir(
@@ -198,6 +192,25 @@ class ConsumirFila extends Command
             report($e);
             $canal->basic_nack($mensagem->getDeliveryTag(), false, false);
         }
+    }
+
+    /**
+     * Em divergencia o header AMQP vence; na ausencia dele, vale o traceparent
+     * do envelope (contrato de observabilidade). Sem isto o span de consumo
+     * abriria um trace novo, desligado da Saga.
+     *
+     * @param  array<string, string>  $headers
+     * @param  array<mixed>  $dados
+     * @return array<string, string>
+     */
+    private function comTraceDoEnvelope(array $headers, array $dados): array
+    {
+        $traceEnvelope = $dados['header']['traceparent'] ?? null;
+        if (! isset($headers['traceparent']) && is_string($traceEnvelope) && $traceEnvelope !== '') {
+            $headers['traceparent'] = $traceEnvelope;
+        }
+
+        return $headers;
     }
 
     /**
