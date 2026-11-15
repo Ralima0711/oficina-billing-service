@@ -31,10 +31,11 @@ jobs:
       # decisao de quem conhece a suite.
       db-connection: sqlite
 
-      # PROVISORIO: numero escolhido sem ter medido a cobertura deste servico.
-      # Gate baixo que roda vale mais que gate alto que nao existe. Medir e
-      # subir e tarefa do dono do servico.
-      cobertura-minima: 50
+      # Ate 15/11/2026 o gate era 50, PROVISORIO, escolhido sem medir. Medido
+      # em 15/11/2026: 74,57% antes dos testes do worker AMQP, do publicador e
+      # da observabilidade; 95,28% (1009/1059 instrucoes) depois, sem excluir
+      # nada da medicao. 80 e a meta do enunciado.
+      cobertura-minima: 80
 
       # Vazio pulava o job inteiro: o pipeline tinha analise e quality gate
       # escritos e desligados. O projeto existe no SonarQube Cloud desde
