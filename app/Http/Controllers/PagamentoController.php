@@ -64,6 +64,9 @@ class PagamentoController extends Controller
                 'pagamentoId' => $pagamento->id,
                 'orcamentoId' => $pagamento->orcamento_id,
                 'status' => 'pendente',
+                // init_point e o link que o cliente deve abrir: e o unico que
+                // funciona com credencial de usuario de teste do Mercado Pago.
+                'initPoint' => $pagamento->init_point,
                 'sandboxInitPoint' => $pagamento->sandbox_init_point,
             ];
         }

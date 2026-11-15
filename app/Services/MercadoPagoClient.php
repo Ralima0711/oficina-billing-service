@@ -20,7 +20,7 @@ class MercadoPagoClient
             'external_reference' => $orcamentoId,
         ]);
 
-        if ($resposta->failed() || ! is_string($resposta->json('id')) || ! is_string($resposta->json('sandbox_init_point'))) {
+        if ($resposta->failed() || ! is_string($resposta->json('id')) || ! is_string($resposta->json('init_point'))) {
             throw CobrancaException::mercadoPago($resposta->status());
         }
 
