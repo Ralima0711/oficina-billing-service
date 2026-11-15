@@ -7,6 +7,7 @@ use App\Models\Pagamento;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class PagamentoTest extends TestCase
@@ -202,6 +203,126 @@ class PagamentoTest extends TestCase
             ->assertStatus(503);
 
         Http::assertNothingSent();
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string, 2: string|null}>
+     */
+    public static function meiosDePagamento(): array
+    {
+        return [
+            'pix pelo metodo' => ['account_money', 'pix', 'pix'],
+            'debito' => ['debit_card', 'maestro', 'debito'],
+            'boleto' => ['ticket', 'bolbradesco', 'boleto'],
+            'transferencia' => ['bank_transfer', 'pec', 'pix'],
+            'desconhecido' => ['crypto', 'btc', null],
+        ];
+    }
+
+    #[DataProvider('meiosDePagamento')]
+    public function test_traduz_o_meio_de_pagamento_do_mercado_pago(string $tipo, string $metodo, ?string $esperado): void
+    {
+        Http::fake([
+            'https://api.mercadopago.com/v1/payments/search*' => Http::response([
+                'results' => [[
+                    'id' => 1001,
+                    'status' => 'approved',
+                    'transaction_amount' => 241.8,
+                    'payment_type_id' => $tipo,
+                    'payment_method_id' => $metodo,
+                ]],
+            ]),
+        ]);
+
+        $pagamento = $this->pagamentoPendente();
+
+        $this->getJson('/api/pagamentos/'.$pagamento->id)
+            ->assertOk()
+            ->assertJsonPath('metodo', $esperado);
+
+        // Sem date_approved, o instante de confirmacao e o da consulta.
+        $this->assertNotNull($pagamento->fresh()->confirmado_em);
+        $this->assertSame('1001', $pagamento->fresh()->payment_id);
+    }
+
+    public function test_cancelado_no_mercado_pago_vira_recusado_com_motivo_padrao(): void
+    {
+        Http::fake([
+            'https://api.mercadopago.com/v1/payments/search*' => Http::response([
+                'results' => [['id' => 1002, 'status' => 'cancelled']],
+            ]),
+        ]);
+
+        $pagamento = $this->pagamentoPendente();
+
+        $this->getJson('/api/pagamentos/'.$pagamento->id)
+            ->assertOk()
+            ->assertJsonPath('motivo', 'recusado');
+        $this->assertSame('recusado', $pagamento->fresh()->status);
+    }
+
+    public function test_pagamento_ja_confirmado_nao_consulta_o_mercado_pago(): void
+    {
+        Http::fake();
+        $pagamento = $this->pagamentoPendente();
+        $pagamento->forceFill([
+            'status' => 'confirmado',
+            'metodo' => 'credito',
+            'confirmado_em' => now(),
+        ])->save();
+
+        $this->getJson('/api/pagamentos/'.$pagamento->id)
+            ->assertOk()
+            ->assertJsonPath('metodo', 'credito');
+
+        Http::assertNothingSent();
+        $this->assertSame(0, (int) $pagamento->fresh()->tentativas);
+    }
+
+    public function test_falha_na_consulta_do_mercado_pago_e_502(): void
+    {
+        Http::fake([
+            'https://api.mercadopago.com/v1/payments/search*' => Http::response(['message' => 'fora'], 500),
+        ]);
+
+        $pagamento = $this->pagamentoPendente();
+
+        $this->getJson('/api/pagamentos/'.$pagamento->id)
+            ->assertStatus(502)
+            ->assertJsonPath('message', 'Mercado Pago respondeu HTTP 500 ao criar ou consultar o pagamento.');
+        $this->assertSame('pendente', $pagamento->fresh()->status);
+    }
+
+    public function test_preferencia_sem_sandbox_init_point_e_502(): void
+    {
+        Http::fake([
+            'https://api.mercadopago.com/checkout/preferences' => Http::response(['id' => 'pref-1'], 201),
+        ]);
+
+        $orcamento = $this->orcamento();
+
+        $this->postJson('/api/orcamentos/'.$orcamento['orcamentoId'].'/pagamentos')
+            ->assertStatus(502);
+    }
+
+    public function test_pagamento_pendente_sem_preferencia_ganha_uma_ao_cobrar_de_novo(): void
+    {
+        Http::fake([
+            'https://api.mercadopago.com/checkout/preferences' => Http::response([
+                'id' => 'pref-9',
+                'sandbox_init_point' => 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-9',
+            ], 201),
+        ]);
+        $pagamento = $this->pagamentoPendente();
+        $pagamento->forceFill(['preference_id' => null, 'sandbox_init_point' => null])->save();
+
+        $this->postJson('/api/orcamentos/'.$pagamento->orcamento_id.'/pagamentos')
+            ->assertOk()
+            ->assertJsonPath('pagamentoId', $pagamento->id)
+            ->assertJsonPath('sandboxInitPoint', 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?pref_id=pref-9');
+
+        $this->assertSame('pref-9', $pagamento->fresh()->preference_id);
+        $this->assertSame(1, Pagamento::query()->count());
     }
 
     private function orcamento(): array

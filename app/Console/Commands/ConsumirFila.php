@@ -4,7 +4,6 @@ namespace App\Console\Commands;
 
 use App\Exceptions\CobrancaException;
 use App\Exceptions\MensagemIlegivel;
-use App\Mensageria\ConexaoRabbit;
 use App\Mensageria\ConsumidorDeComando;
 use App\Mensageria\Envelope;
 use App\Mensageria\MessageTracing;
@@ -19,6 +18,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Database\QueryException;
 use JsonException;
 use PhpAmqpLib\Channel\AMQPChannel;
+use PhpAmqpLib\Connection\AbstractConnection;
 use PhpAmqpLib\Exception\AMQPProtocolChannelException;
 use PhpAmqpLib\Exception\AMQPRuntimeException;
 use PhpAmqpLib\Message\AMQPMessage;
@@ -46,7 +46,9 @@ class ConsumirFila extends Command
             return self::FAILURE;
         }
 
-        $conexao = ConexaoRabbit::abrir();
+        // Resolvida pelo container (binding no AppServiceProvider, que chama
+        // ConexaoRabbit::abrir) para que os testes troquem o broker por um duble.
+        $conexao = $this->laravel->make(AbstractConnection::class);
         $canal = $conexao->channel();
         $encerrar = false;
 

@@ -4,12 +4,15 @@ namespace Tests\Feature;
 
 use App\Exceptions\CobrancaException;
 use App\Exceptions\MensagemIlegivel;
+use App\Mensageria\CaixaDeSaida;
 use App\Mensageria\PublicadorEventos;
 use App\Models\MensagemProcessada;
 use App\Models\Pagamento;
 use App\Services\ProcessarCobrarPagamento;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 use Tests\Support\PublicadorFake;
 use Tests\TestCase;
 
@@ -123,6 +126,135 @@ class ConsumirCobrarPagamentoTest extends TestCase
             $this->assertSame(0, Pagamento::query()->count());
             $this->assertSame([], $this->publicador->eventos);
         }
+    }
+
+    /**
+     * @return array<string, array{0: array<string, mixed>, 1: string}>
+     */
+    public static function recusasImediatas(): array
+    {
+        return [
+            'os divergente' => [['osId' => '55555555-5555-5555-5555-555555555555'], 'os_divergente'],
+            'valor em texto' => [['valorTotal' => '241.8'], 'valor_invalido'],
+            'valor zero' => [['valorTotal' => 0], 'sem_valor'],
+            'moeda estrangeira' => [['moeda' => 'USD'], 'moeda_invalida'],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $sobrescrever
+     */
+    #[DataProvider('recusasImediatas')]
+    public function test_comando_inconsistente_com_o_orcamento_e_recusado_sem_mercado_pago(array $sobrescrever, string $motivo): void
+    {
+        Http::fake();
+        $mensagem = $this->mensagem($this->orcamento(), '13131313-1313-1313-1313-131313131313');
+        $mensagem['body'] = array_merge($mensagem['body'], $sobrescrever);
+
+        $this->processar()->executar($mensagem);
+
+        Http::assertNothingSent();
+        $pagamento = Pagamento::query()->sole();
+        $this->assertSame('recusado', $pagamento->status);
+        $this->assertSame($motivo, $pagamento->motivo);
+        $this->assertCount(1, $this->publicador->eventos);
+        $this->assertSame('pagamento.recusado', $this->publicador->eventos[0]['routingKey']);
+        $this->assertSame($motivo, $this->publicador->eventos[0]['envelope']['body']['motivo']);
+        $this->assertSame($mensagem['body']['osId'], $this->publicador->eventos[0]['envelope']['body']['osId']);
+    }
+
+    public function test_recusa_do_mercado_pago_publica_pagamento_recusado(): void
+    {
+        $orcamento = $this->orcamento();
+        $this->fakeMercadoPago([
+            ['results' => []],
+            ['results' => [[
+                'id' => 1000,
+                'status' => 'rejected',
+                'status_detail' => 'cc_rejected_insufficient_amount',
+                'payment_type_id' => 'credit_card',
+                'payment_method_id' => 'visa',
+                'date_created' => '2026-11-04T18:21:00.000Z',
+            ]]],
+        ]);
+
+        $this->processar()->executar($this->mensagem($orcamento, '14141414-1414-1414-1414-141414141414'));
+
+        $pagamento = Pagamento::query()->sole();
+        $this->assertSame(2, (int) $pagamento->tentativas);
+        $this->assertSame('pagamento.recusado', $this->publicador->eventos[0]['routingKey']);
+        $this->assertSame('cc_rejected_insufficient_amount', $this->publicador->eventos[0]['envelope']['body']['motivo']);
+    }
+
+    public function test_reentrega_retoma_o_acompanhamento_do_pagamento_pendente(): void
+    {
+        // O worker morreu no meio do polling: o messageId ja foi registrado e
+        // o pagamento ficou pendente, sem evento gravado.
+        $orcamento = $this->orcamento();
+        $mensagem = $this->mensagem($orcamento, '15151515-1515-1515-1515-151515151515');
+        app(CaixaDeSaida::class)->registrar('15151515-1515-1515-1515-151515151515', 'CobrarPagamento');
+        Pagamento::query()->create([
+            'orcamento_id' => $orcamento['orcamentoId'],
+            'os_id' => $orcamento['osId'],
+            'preference_id' => 'pref-1',
+            'status' => 'pendente',
+            'valor' => '241.80',
+            'moeda' => 'BRL',
+        ]);
+        $this->fakeMercadoPago([$this->pagamentoAprovado()]);
+
+        $this->processar()->executar($mensagem);
+
+        $this->assertSame('confirmado', Pagamento::query()->sole()->status);
+        $this->assertCount(1, $this->publicador->eventos);
+        $this->assertSame('pagamento.confirmado', $this->publicador->eventos[0]['routingKey']);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/checkout/preferences'));
+    }
+
+    public function test_reentrega_sem_pagamento_nem_evento_nao_faz_nada(): void
+    {
+        Http::fake();
+        $orcamento = $this->orcamento();
+        app(CaixaDeSaida::class)->registrar('16161616-1616-1616-1616-161616161616', 'CobrarPagamento');
+
+        $this->processar()->executar($this->mensagem($orcamento, '16161616-1616-1616-1616-161616161616'));
+
+        Http::assertNothingSent();
+        $this->assertSame(0, Pagamento::query()->count());
+        $this->assertSame([], $this->publicador->eventos);
+    }
+
+    public function test_reentrega_republica_o_evento_que_ficou_pendente(): void
+    {
+        Http::fake();
+        $this->publicador->falhas = 1;
+        $orcamento = $this->orcamento();
+        $orcamento['valorTotal'] = 10;
+        $mensagem = $this->mensagem($orcamento, '17171717-1717-1717-1717-171717171717');
+
+        try {
+            $this->processar()->executar($mensagem);
+            $this->fail('a publicação deveria falhar');
+        } catch (RuntimeException) {
+            $this->assertSame([], $this->publicador->eventos);
+        }
+
+        $this->processar()->executar($mensagem);
+
+        $this->assertSame(1, Pagamento::query()->count());
+        $this->assertCount(1, $this->publicador->eventos);
+        $this->assertSame('valor_divergente', $this->publicador->eventos[0]['envelope']['body']['motivo']);
+    }
+
+    public function test_mensagem_sem_body_e_ilegivel(): void
+    {
+        $mensagem = $this->mensagem($this->orcamento());
+        unset($mensagem['body']);
+
+        $this->expectException(MensagemIlegivel::class);
+        $this->expectExceptionMessage('body ausente.');
+
+        $this->processar()->executar($mensagem);
     }
 
     private function processar(): ProcessarCobrarPagamento

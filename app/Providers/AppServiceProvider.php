@@ -6,11 +6,17 @@ use App\Mensageria\ConexaoRabbit;
 use App\Mensageria\PublicadorEventos;
 use App\Mensageria\PublicadorRabbitMq;
 use Illuminate\Support\ServiceProvider;
+use PhpAmqpLib\Connection\AbstractConnection;
 
 class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        // Conexao nova a cada resolucao, como antes. O binding existe para
+        // que fila:consumir e o publicador nao chamem o estatico direto: e
+        // por ele que os testes injetam um duble do broker.
+        $this->app->bind(AbstractConnection::class, fn () => ConexaoRabbit::abrir());
+
         /*
          * PublicadorEventos e uma interface, e ate 12/11 ela nao tinha
          * binding nenhum no container: o unico lugar que a registrava era o
@@ -28,8 +34,8 @@ class AppServiceProvider extends ServiceProvider
          * alguem resolve PublicadorEventos. Uma requisicao que so le ou gera
          * orcamento nunca abre conexao com o broker.
          */
-        $this->app->singleton(PublicadorEventos::class, function () {
-            $conexao = ConexaoRabbit::abrir();
+        $this->app->singleton(PublicadorEventos::class, function ($app) {
+            $conexao = $app->make(AbstractConnection::class);
 
             return new PublicadorRabbitMq(
                 $conexao->channel(),
