@@ -166,6 +166,13 @@ class ConsumirFila extends Command
 
             $headers = $this->headersAmqp($mensagem);
             $dados = Envelope::priorizarTraceparent($dados, $headers['traceparent'] ?? null);
+            // Em divergencia o header AMQP vence; na ausencia dele, vale o do
+            // envelope (contrato de observabilidade). Sem isto o span de consumo
+            // abriria um trace novo, desligado da Saga.
+            $traceEnvelope = $dados['header']['traceparent'] ?? null;
+            if (! isset($headers['traceparent']) && is_string($traceEnvelope) && $traceEnvelope !== '') {
+                $headers['traceparent'] = $traceEnvelope;
+            }
             $osId = is_array($dados['body'] ?? null) ? ($dados['body']['osId'] ?? null) : null;
 
             MessageTracing::consumir(
@@ -198,6 +205,13 @@ class ConsumirFila extends Command
      */
     private function headersAmqp(AMQPMessage $mensagem): array
     {
+        // get() lanca OutOfBoundsException quando a propriedade nao existe. Sem
+        // o has(), mensagem publicada sem headers AMQP caia no catch generico
+        // e ia para a DLQ, deixando a Saga esperando o evento para sempre.
+        if (! $mensagem->has('application_headers')) {
+            return [];
+        }
+
         $headers = $mensagem->get('application_headers');
         if (! $headers instanceof AMQPTable) {
             return [];
