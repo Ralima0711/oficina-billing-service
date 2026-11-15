@@ -4,7 +4,6 @@ namespace App\Console\Commands;
 
 use App\Exceptions\CobrancaException;
 use App\Exceptions\MensagemIlegivel;
-use App\Mensageria\ConexaoRabbit;
 use App\Mensageria\ConsumidorDeComando;
 use App\Mensageria\Envelope;
 use App\Mensageria\MessageTracing;
@@ -19,6 +18,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Database\QueryException;
 use JsonException;
 use PhpAmqpLib\Channel\AMQPChannel;
+use PhpAmqpLib\Connection\AbstractConnection;
 use PhpAmqpLib\Exception\AMQPProtocolChannelException;
 use PhpAmqpLib\Exception\AMQPRuntimeException;
 use PhpAmqpLib\Message\AMQPMessage;
@@ -46,7 +46,9 @@ class ConsumirFila extends Command
             return self::FAILURE;
         }
 
-        $conexao = ConexaoRabbit::abrir();
+        // Resolvida pelo container (binding no AppServiceProvider, que chama
+        // ConexaoRabbit::abrir) para que os testes troquem o broker por um duble.
+        $conexao = $this->laravel->make(AbstractConnection::class);
         $canal = $conexao->channel();
         $encerrar = false;
 
@@ -164,6 +166,7 @@ class ConsumirFila extends Command
 
             $headers = $this->headersAmqp($mensagem);
             $dados = Envelope::priorizarTraceparent($dados, $headers['traceparent'] ?? null);
+            $headers = $this->comTraceDoEnvelope($headers, $dados);
             $osId = is_array($dados['body'] ?? null) ? ($dados['body']['osId'] ?? null) : null;
 
             MessageTracing::consumir(
@@ -192,10 +195,36 @@ class ConsumirFila extends Command
     }
 
     /**
+     * Em divergencia o header AMQP vence; na ausencia dele, vale o traceparent
+     * do envelope (contrato de observabilidade). Sem isto o span de consumo
+     * abriria um trace novo, desligado da Saga.
+     *
+     * @param  array<string, string>  $headers
+     * @param  array<mixed>  $dados
+     * @return array<string, string>
+     */
+    private function comTraceDoEnvelope(array $headers, array $dados): array
+    {
+        $traceEnvelope = $dados['header']['traceparent'] ?? null;
+        if (! isset($headers['traceparent']) && is_string($traceEnvelope) && $traceEnvelope !== '') {
+            $headers['traceparent'] = $traceEnvelope;
+        }
+
+        return $headers;
+    }
+
+    /**
      * @return array<string, string>
      */
     private function headersAmqp(AMQPMessage $mensagem): array
     {
+        // get() lanca OutOfBoundsException quando a propriedade nao existe. Sem
+        // o has(), mensagem publicada sem headers AMQP caia no catch generico
+        // e ia para a DLQ, deixando a Saga esperando o evento para sempre.
+        if (! $mensagem->has('application_headers')) {
+            return [];
+        }
+
         $headers = $mensagem->get('application_headers');
         if (! $headers instanceof AMQPTable) {
             return [];

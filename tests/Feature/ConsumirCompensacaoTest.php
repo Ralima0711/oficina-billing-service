@@ -12,6 +12,7 @@ use App\Services\ProcessarAnularOrcamento;
 use App\Services\ProcessarEstornarPagamento;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Support\PublicadorFake;
 use Tests\TestCase;
 
@@ -140,6 +141,141 @@ class ConsumirCompensacaoTest extends TestCase
             $this->fail('motivo ausente deveria ser ilegível');
         } catch (MensagemIlegivel) {
             $this->assertSame('gerado', Orcamento::query()->find($orcamento['orcamentoId'])->status);
+            $this->assertSame(0, MensagemProcessada::query()->count());
+        }
+    }
+
+    public function test_sem_pagamento_id_estorna_o_confirmado_da_os(): void
+    {
+        Http::fake([
+            'https://api.mercadopago.com/v1/payments/999/refunds' => Http::response(['status' => 'approved'], 201),
+        ]);
+        $pagamento = $this->pagamentoConfirmado();
+
+        $this->estornar()->executar($this->mensagem(
+            $pagamento->os_id,
+            $pagamento->orcamento_id,
+            'execucao_falhou',
+            '13131313-1313-1313-1313-131313131313',
+        ));
+
+        $this->assertSame('estornado', $pagamento->fresh()->status);
+        Http::assertSent(fn ($request) => $request->hasHeader('X-Idempotency-Key', '13131313-1313-1313-1313-131313131313'));
+    }
+
+    public function test_reembolso_ja_feito_no_mercado_pago_conta_como_estornado(): void
+    {
+        // O POST do refund falha (ex.: 400 "already refunded"), mas o pagamento
+        // ja consta como refunded: o estorno aconteceu e nao deve ir para a DLQ.
+        Http::fake([
+            'https://api.mercadopago.com/v1/payments/999/refunds' => Http::response(['message' => 'already refunded'], 400),
+            'https://api.mercadopago.com/v1/payments/999' => Http::response(['status' => 'refunded'], 200),
+        ]);
+        $pagamento = $this->pagamentoConfirmado();
+
+        $this->estornar()->executar($this->mensagem(
+            $pagamento->os_id,
+            $pagamento->orcamento_id,
+            'execucao_falhou',
+            '14141414-1414-1414-1414-141414141414',
+            $pagamento->id,
+        ));
+
+        $this->assertSame('estornado', $pagamento->fresh()->status);
+        Http::assertSentCount(2);
+    }
+
+    public function test_pagamento_de_outra_os_nao_e_estornado(): void
+    {
+        Http::fake();
+        $pagamento = $this->pagamentoConfirmado();
+
+        $this->estornar()->executar($this->mensagem(
+            '55555555-5555-5555-5555-555555555555',
+            $pagamento->orcamento_id,
+            'execucao_falhou',
+            '15151515-1515-1515-1515-151515151515',
+            $pagamento->id,
+        ));
+
+        Http::assertNothingSent();
+        $this->assertSame('confirmado', $pagamento->fresh()->status);
+        $this->assertSame(1, MensagemProcessada::query()->count());
+    }
+
+    public function test_pagamento_sem_payment_id_e_estornado_sem_chamar_o_mercado_pago(): void
+    {
+        Http::fake();
+        $pagamento = $this->pagamentoConfirmado();
+        $pagamento->payment_id = null;
+        $pagamento->save();
+
+        $this->estornar()->executar($this->mensagem(
+            $pagamento->os_id,
+            $pagamento->orcamento_id,
+            'pagamento_recusado',
+            '16161616-1616-1616-1616-161616161616',
+            $pagamento->id,
+        ));
+
+        Http::assertNothingSent();
+        $this->assertSame('estornado', $pagamento->fresh()->status);
+    }
+
+    public function test_pagamento_id_malformado_e_ilegivel(): void
+    {
+        $pagamento = $this->pagamentoConfirmado();
+        $mensagem = $this->mensagem($pagamento->os_id, $pagamento->orcamento_id, 'execucao_falhou', '17171717-1717-1717-1717-171717171717');
+        $mensagem['body']['pagamentoId'] = 'nao-e-uuid';
+
+        try {
+            $this->estornar()->executar($mensagem);
+            $this->fail('pagamentoId malformado deveria ser ilegível');
+        } catch (MensagemIlegivel $e) {
+            $this->assertSame('body.pagamentoId ausente ou inválido.', $e->getMessage());
+            $this->assertSame('confirmado', $pagamento->fresh()->status);
+            $this->assertSame(0, MensagemProcessada::query()->count());
+        }
+    }
+
+    /**
+     * @return array<string, array{0: callable(array<string, mixed>): array<string, mixed>, 1: string}>
+     */
+    public static function comandosIlegiveis(): array
+    {
+        return [
+            'messageId ausente' => [function (array $m) {
+                unset($m['header']['messageId']);
+
+                return $m;
+            }, 'header.messageId ausente ou inválido.'],
+            'body ausente' => [function (array $m) {
+                unset($m['body']);
+
+                return $m;
+            }, 'body ausente.'],
+            'osId invalido' => [function (array $m) {
+                $m['body']['osId'] = 'os-1';
+
+                return $m;
+            }, 'body.osId ausente ou inválido.'],
+        ];
+    }
+
+    #[DataProvider('comandosIlegiveis')]
+    public function test_comando_de_compensacao_malformado_e_ilegivel(callable $estragar, string $erro): void
+    {
+        $mensagem = $estragar($this->mensagem(
+            '11111111-1111-1111-1111-111111111111',
+            '99999999-9999-9999-9999-999999999999',
+            'pagamento_recusado',
+        ));
+
+        try {
+            $this->anular()->executar($mensagem);
+            $this->fail('o comando deveria ser ilegível');
+        } catch (MensagemIlegivel $e) {
+            $this->assertSame($erro, $e->getMessage());
             $this->assertSame(0, MensagemProcessada::query()->count());
         }
     }
