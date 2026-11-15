@@ -21,7 +21,7 @@ Laravel 12, Postgres próprio, sem acessar o banco de outro serviço.
 - `POST /api/orcamentos/{id}/pagamentos` cria a preferência no sandbox do Mercado Pago e devolve o `sandboxInitPoint`.
 - `GET /api/pagamentos/{id}` consulta o pagamento e devolve `pagamento.confirmado`, `pagamento.recusado` ou `pendente`.
 - `php artisan fila:consumir` consome `billing.gerar-orcamento`, `billing.cobrar-pagamento`, `billing.anular-orcamento` e `billing.estornar-pagamento`. Publica `orcamento.gerado`, `orcamento.falhou`, `pagamento.confirmado` ou `pagamento.recusado`. Anular e estornar só mudam o estado local: o contrato não define evento para a compensação.
-- Swagger em `/api/documentation`.
+- Swagger em `/api/documentation` (gerado das anotações). O contrato HTTP versionado está em `docs/openapi.yaml` e a collection do Postman em `docs/postman/`.
 - **O preço não vem no comando.** O billing consulta o catálogo local `catalogo_precos`,
   com os nomes e valores que a API da Fase 3 já usa (peça, insumo e serviço). Insumo entra
   como `peca`, porque o contrato só tem `peca` e `servico`. Item desconhecido responde 422.
@@ -101,6 +101,8 @@ php artisan test
 | `docs/contrato-eventos-fase4.md` | Contrato v1.0 — **em caso de divergência, ele manda** |
 | `docs/adrs-fase4.md` | ADR-0007 a ADR-0012 |
 | `docs/asyncapi.yaml` | Contrato AsyncAPI dos eventos |
+| `docs/openapi.yaml` | Contrato HTTP (OpenAPI 3.0.3) |
+| `docs/postman/oficina-billing-service.postman_collection.json` | Collection do Postman, derivada do `openapi.yaml` |
 | `docs/guia-testes-cobertura.md` | Pirâmide de testes e meta de 80% |
 | `docs/arquitetura-fase4.png` | Diagrama da arquitetura final |
 
