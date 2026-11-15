@@ -1,0 +1,16 @@
+default:
+  autoload:
+    '': '%paths.base%/features/bootstrap'
+  suites:
+    default:
+      # O padrao e SQLite em memoria, o mesmo banco do PHPUnit. Postgres so
+      # entra se o operador apontar para um banco *_test — o FeatureContext
+      # recusa qualquer outro, porque o migrate:fresh derruba as tabelas.
+      #
+      #   vendor/bin/behat
+      #
+      # Contra o Postgres de teste:
+      #   DB_CONNECTION=pgsql DB_HOST=127.0.0.1 DB_PORT=5434 DB_DATABASE=billing_service_test \
+      #   DB_USERNAME=postgres DB_PASSWORD=postgres vendor/bin/behat
+      contexts:
+        - FeatureContext
