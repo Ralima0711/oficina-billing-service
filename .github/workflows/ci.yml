@@ -58,3 +58,28 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
       KUBECONFIG: ${{ secrets.KUBECONFIG }}
+
+  # Os cenários de features/*.feature rodam com o Behat, no mesmo desenho do
+  # OS Service. Lá o job sobe Postgres porque a suite da OS recusa SQLite nos
+  # cenários da saga. Aqui a suite PHPUnit já é SQLite em memória, e o Behat
+  # segue o mesmo banco. O FeatureContext continua recusando Postgres cujo
+  # nome não termina em _test: o migrate:fresh derruba as tabelas.
+  bdd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: mbstring, pdo_sqlite, sockets
+          coverage: none
+      - name: Instalar dependencias
+        run: composer install --prefer-dist --no-interaction --no-progress
+      - name: Cenarios BDD (Behat)
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ":memory:"
+          MP_ACCESS_TOKEN: TEST-token
+          OTEL_EXPORTER_OTLP_ENDPOINT: ""
+          OTEL_EXPORTER_OTLP_HEADERS: ""
+        run: vendor/bin/behat

@@ -94,6 +94,12 @@ php artisan key:generate
 php artisan test
 ```
 
+Os cenários em português (`features/*.feature`) rodam com o Behat, no mesmo desenho do OS Service: o contexto sobe o Laravel e chama a API. O padrão também é SQLite em memória. O Mercado Pago não é chamado de verdade. Se `DB_CONNECTION=pgsql` estiver exportado, o banco precisa terminar em `_test` ou `_teste` — o Behat roda `migrate:fresh` e recusa qualquer outro nome.
+
+```bash
+vendor/bin/behat
+```
+
 ## Documentação
 
 | Documento | O que é |
