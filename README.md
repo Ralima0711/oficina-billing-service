@@ -112,6 +112,21 @@ vendor/bin/behat
 | `docs/guia-testes-cobertura.md` | Pirâmide de testes e meta de 80% |
 | `docs/arquitetura-fase4.png` | Diagrama da arquitetura final |
 
+## Cobertura
+
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=Ralima0711_oficina-billing-service&metric=coverage)](https://sonarcloud.io/summary/overall?id=Ralima0711_oficina-billing-service)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=Ralima0711_oficina-billing-service&metric=alert_status)](https://sonarcloud.io/summary/overall?id=Ralima0711_oficina-billing-service)
+
+Meta do enunciado: **80% por serviço — atingida.**
+
+| Medida | Valor | Evidência |
+|---|---|---|
+| Cobertura de linha medida pelo pipeline (pcov, `clover.xml`) | **95,32%** (1018 / 1068 instruções) | [execução do CI na `main`, 15/11/2026](https://github.com/Ralima0711/oficina-billing-service/actions/runs/43751990110), job *Testes e cobertura* |
+| Cobertura no SonarQube Cloud (linha + condição, só `app/`) | **95,5%** | [painel do projeto](https://sonarcloud.io/summary/overall?id=Ralima0711_oficina-billing-service) |
+| Gate do pipeline | **80%** | `cobertura-minima: 80` no `.github/workflows/ci.yml` |
+
+O job *Testes e cobertura* reprova o PR abaixo de 80%, e o Sonar cobra 80% no código novo de cada PR. Em cada execução do CI, o artefato `cobertura-billing-service` traz o `clover.xml` completo, arquivo por arquivo. A meta foi atingida só com testes: nada foi excluído da medição.
+
 ## Regras do repositório
 
 - `main` protegida: PR obrigatório com 1 aprovação
